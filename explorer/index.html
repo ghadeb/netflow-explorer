@@ -44,11 +44,14 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
 @media(max-width:950px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.mix{grid-template-columns:70px 1fr}.ring{width:70px}}
 @media(max-width:640px){.wrap{width:calc(100% - 24px)}.grid,.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.card{grid-column:1/-1}.metric{padding:10px}.chart svg{height:145px}}
 </style>
+<link rel="stylesheet" href="/visuals.css">
 
 <header><div class="wrap mast">
   <div class="brand"><b>◈</b> FLUXO EXPLORER</div>
   <nav>
-    <a href="#patterns" data-i18n>Padrões</a><a href="#flows" data-i18n>Fluxos</a>
+    <button type="button" data-view="live" aria-current="page" data-i18n>Em directo</button>
+    <button type="button" data-view="archive" data-i18n>Arquivos</button>
+    <button type="button" data-view="map" data-i18n>Weathermap</button>
     <select id="language" aria-label="Idioma" data-i18n-aria-label="Idioma">
       <option value="pt" lang="pt">Português</option>
       <option value="en" lang="en">English</option>
@@ -56,9 +59,39 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
   </nav>
 </div></header>
 <main class="wrap">
-  <h1 data-i18n>Explorador de tráfego</h1>
-  <p class="sub" data-i18n>NetFlow v9 · IPv4 · Hora UTC</p>
-
+  <section id="archive-controls" hidden>
+    <h1 data-i18n>Arquivos diários</h1>
+    <p class="sub" data-i18n>Abre um dia UTC para pesquisar, visualizar e exportar os seus fluxos.</p>
+    <div class="card archive-controls">
+      <button type="button" id="load-day" data-i18n>↑ Importar arquivo .xz</button>
+      <input type="file" id="day-file" accept=".xz,application/x-xz" hidden>
+      <span id="archive-status" role="status"></span>
+    </div>
+  </section>
+  <section id="map-view" hidden>
+    <h1 data-i18n>Weathermap</h1>
+    <p id="map-source" class="sub"></p>
+    <form id="map-form">
+      <label class="search"><span data-i18n>Host IPv4 ou rede de origem (CIDR)</span>
+        <input name="target" required maxlength="18" placeholder="192.0.2.10 / 192.0.2.0/24" autocomplete="off">
+      </label>
+      <button class="primary" data-i18n>Gerar mapa</button>
+    </form>
+    <article class="card map-card" aria-labelledby="map-title">
+      <div class="card-head"><h2 id="map-title"></h2></div>
+      <div id="map-content" aria-live="polite"></div>
+      <div class="pagination" id="map-pages" hidden>
+        <button type="button" id="map-prev" data-i18n>← Anterior</button>
+        <small id="map-page"></small>
+        <button type="button" id="map-next" data-i18n>Seguinte →</button>
+      </div>
+    </article>
+  </section>
+  <div id="dashboard">
+  <div id="live-title">
+    <h1 data-i18n>Explorador de tráfego</h1>
+    <p class="sub" data-i18n>NetFlow v9 · IPv4 · Hora UTC</p>
+  </div>
   <form id="filters">
     <label class="search"><span data-i18n>Pesquisar</span>
       <input name="q" type="search" maxlength="160" placeholder="IP, porto, serviço, protocolo ou AS…" data-i18n-placeholder="IP, porto, serviço, protocolo ou AS…" autocomplete="off">
@@ -75,7 +108,11 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
     <button class="primary" data-i18n>Aplicar</button>
     <button type="button" id="clear" data-i18n>Limpar</button>
   </form>
-  <div id="status" role="status"></div>
+  <div class="refresh-bar">
+    <div id="status" role="status"></div>
+    <div><small id="auto-refresh" data-i18n>Actualização automática a cada 10 min</small>
+      <button type="button" id="refresh" data-i18n>↻ Actualizar agora</button></div>
+  </div>
 
   <div class="metrics" id="metrics"></div>
   <section class="grid" id="patterns">
@@ -83,7 +120,7 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
     <article class="card"><div class="card-head"><h3 data-i18n>Protocolos</h3></div><div id="proto"></div></article>
     <article class="card"><div class="card-head"><h3 data-i18n>Top origens</h3></div><div id="src" class="rank"></div></article>
     <article class="card"><div class="card-head"><h3 data-i18n>Top destinos</h3></div><div id="dst" class="rank"></div></article>
-    <article class="card"><div class="card-head"><h3 data-i18n>Portos e serviços de destino</h3></div><div id="port" class="rank"></div></article>
+    <article class="card full service-card"><div class="card-head"><h3 data-i18n>Portos e serviços de destino</h3><small data-i18n>Selecciona um serviço para filtrar o painel</small></div><div id="port"></div></article>
     <article class="card wide"><div class="card-head"><h3 data-i18n>Conversas · origem → destino</h3></div><div id="pair" class="rank"></div></article>
     <article class="card"><div class="card-head"><h3 data-i18n>ASNs de destino exportados</h3></div><div id="asn" class="rank"></div></article>
     <article class="card full"><div class="card-head"><h3 data-i18n>Intensidade por dia e hora</h3><small data-i18n>UTC · escolhe 7 dias para comparar a semana</small></div><div class="heat-scroll"><div id="heat" class="heat"></div></div></article>
@@ -105,9 +142,11 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
     </div>
     <p class="hint" data-i18n>Os sentidos referem-se à LAN monitorizada. Se os dois routers observam o mesmo tráfego, selecciona um router para evitar somar as duas observações.</p>
   </section>
+  </div>
 </main>
 
 <script src="/i18n.js"></script>
+<script src="/visuals.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const form = $('filters');
@@ -124,6 +163,8 @@ const esc = value => String(value ?? '—').replace(/[&<>"']/g, ch => ({
 })[ch]);
 
 let filters, anchor, current, chartData, request, statusMessage = '';
+let activeView = 'live', dataset = 'live', archive, loading = false;
+let archiveStatus = '';
 
 function localize(root = document) {
   for (const node of root.querySelectorAll('[data-i18n]')) {
@@ -177,13 +218,16 @@ function requestError(error) {
   return error instanceof TypeError ? 'Não foi possível ligar ao servidor.' : error.message;
 }
 function params(page, charts) {
-  return new URLSearchParams({...filters, ...anchor, page, charts: charts ? '1' : '0',
+  const query = new URLSearchParams({...filters, ...anchor, page, charts: charts ? '1' : '0',
     size: $('size').value, sort: $('sort').value});
+  if (dataset === 'archive') query.set('archive', archive.id);
+  return query;
 }
 async function load(page = 1, charts = true) {
   request?.abort();
   const controller = new AbortController();
   request = controller;
+  loading = true;
   status('A consultar o SQLite…');
   try {
     const response = await fetch('/api/view?' + params(page, charts), {signal:controller.signal});
@@ -203,9 +247,16 @@ async function load(page = 1, charts = true) {
     status(() => t('Consulta até') + ' ' + stamp(data.end) + ' UTC');
   } catch (error) {
     if (!controller.signal.aborted) status(requestError(error), true);
+  } finally {
+    if (request === controller) loading = false;
   }
 }
+function refresh() {
+  anchor = {};
+  load();
+}
 function apply() {
+  clearMap();
   filters = Object.fromEntries(new FormData(form));
   anchor = {};
   current = null;
@@ -225,6 +276,7 @@ function barList(rows, key) {
   }).join('');
 }
 function draw(data) {
+  $('metrics').hidden = $('patterns').hidden = false;
   const totals = data.totals;
   $('metrics').innerHTML = [
     [t('Volume total'),volume(totals.total),''],[t('Enviado'),volume(totals.up),'up'],
@@ -254,7 +306,8 @@ function draw(data) {
     $('point').textContent = `${stamp(row.at)} UTC · ${t('Enviado')} ${volume(row.up)} · ${t('Recebido')} ${volume(row.down)}`;
   };
 
-  for (const key of ['src','dst','port','pair','asn']) {
+  renderServices(data.charts.port, totals.total);
+  for (const key of ['src','dst','pair','asn']) {
     const rows = data.charts[key];
     $(key).innerHTML = rows.length ? barList(rows,key) :
       (key === 'asn' ? `<p class="empty">${t('Sem ASN de destino exportado neste intervalo.')}</p>` : empty());
@@ -295,7 +348,7 @@ function table(data) {
     (data.matches === 1 ? 'grupo' : 'grupos');
   $('count').textContent = fmt.format(data.matches) + ' ' + t(unit);
   const titles = individual ?
-    ['Recepção UTC','Router','Origem','Destino','Protocolo / serviço','ASN origem / destino','Enviado','Recebido','Total','Pacotes'] :
+    ['Recepção UTC','Router','Origem','Destino','Protocolo / serviço','ASN origem / destino','Enviado','Recebido','Total','Pacotes','Mapa'] :
     ['Grupo','Registos','Enviado','Recebido','Total','Pacotes'];
   $('head').innerHTML = '<tr>' + titles.map(title => `<th scope="col">${t(title)}</th>`).join('') + '</tr>';
   $('body').innerHTML = data.rows.length ? data.rows.map(row => {
@@ -305,8 +358,10 @@ function table(data) {
       <td>${esc(t(row.proto))}${row.dport > 0 ? ' / '+esc(row.dport) : ''}${row.service ? ' · '+esc(row.service) : ''}</td>
       <td>${esc(asn(row.sasn))} / ${esc(asn(row.dasn))}</td>` :
       `<td>${esc(t(row.key))}${row.service ? ' · '+esc(row.service) : ''}</td><td>${fmt.format(row.flows)}</td>`;
+    const map = individual ? `<td><button type="button" class="map-link" data-flow-id="${row.id}"
+      data-flow-received="${row.received}">${t('Ver mapa')}</button></td>` : '';
     return `<tr>${lead}<td class="number up">${volume(row.up)}</td><td class="number down">${volume(row.down)}</td>
-      <td class="number"><b>${volume(row.total)}</b></td><td class="number">${fmt.format(row.packets)}</td></tr>`;
+      <td class="number"><b>${volume(row.total)}</b></td><td class="number">${fmt.format(row.packets)}</td>${map}</tr>`;
   }).join('') : `<tr><td colspan="${titles.length}">${t('Sem resultados para os filtros seleccionados.')}</td></tr>`;
   const pages = Math.max(1, Math.ceil(data.matches / Number($('size').value)));
   $('page').textContent = `${t('Página')} ${fmt.format(data.page)} ${t('de')} ${fmt.format(pages)}`;
@@ -319,7 +374,22 @@ form.onsubmit = event => { event.preventDefault(); apply(); };
 form.elements.group.onchange = () => {
   $('prefix').hidden = !['srcnet','dstnet'].includes(form.elements.group.value);
 };
-$('clear').onclick = () => { form.reset(); $('prefix').hidden = true; apply(); };
+function resetDataset() {
+  chartData = null;
+  $('metrics').hidden = $('patterns').hidden = true;
+  resetFilters();
+}
+function resetFilters() {
+  form.reset();
+  if (dataset === 'archive') form.elements.minutes.value = '1440';
+  $('prefix').hidden = true;
+  apply();
+}
+$('clear').onclick = resetFilters;
+$('refresh').onclick = refresh;
+setInterval(() => {
+  if (activeView === 'live' && !loading) refresh();
+}, 600_000);
 $('prev').onclick = () => load(current.page - 1, false);
 $('next').onclick = () => load(current.page + 1, false);
 $('sort').onchange = $('size').onchange = () => { if (current) load(1,false); };
@@ -328,6 +398,15 @@ $('patterns').onclick = event => {
   if (button) { form.elements.q.value = button.dataset.query; apply(); }
 };
 $('body').onclick = async event => {
+  const flow = event.target.closest('[data-flow-id]');
+  if (flow) {
+    const query = params(1, false);
+    query.set('flow_id', flow.dataset.flowId);
+    query.set('flow_received', flow.dataset.flowReceived);
+    showView('map');
+    loadMap('flow', query);
+    return;
+  }
   const button = event.target.closest('[data-ptr]');
   if (!button || !current) return;
   button.disabled = true;
@@ -356,6 +435,69 @@ $('export').onclick = async () => {
   } catch (error) { status(requestError(error), true); }
   finally { $('export').disabled = !current?.rows.length; }
 };
+function renderArchiveStatus() {
+  $('archive-status').textContent = archiveStatus ? t(archiveStatus)
+    : archive ? t('Arquivo UTC') + ' · ' + archive.date : '';
+}
+
+function showView(view) {
+  activeView = view;
+  document.querySelectorAll('[data-view]').forEach(button => {
+    if (button.dataset.view === view) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
+  $('archive-controls').hidden = view !== 'archive';
+  $('map-view').hidden = view !== 'map';
+  $('dashboard').hidden = view === 'map' || (view === 'archive' && !archive);
+  $('live-title').hidden = $('auto-refresh').hidden = view !== 'live';
+  if (!$('dashboard').hidden && dataset !== view) {
+    dataset = view;
+    resetDataset();
+  } else if (view === 'live' && current && !loading && Date.now() / 1000 - current.end > 600) {
+    refresh();
+  }
+  if (view === 'map') {
+    renderMap();
+    window.scrollTo(0, 0);
+  }
+}
+for (const button of document.querySelectorAll('[data-view]')) {
+  button.onclick = () => showView(button.dataset.view);
+}
+$('load-day').onclick = () => $('day-file').click();
+$('day-file').onchange = async () => {
+  const file = $('day-file').files[0];
+  $('day-file').value = '';
+  if (!file) return;
+  $('load-day').disabled = true;
+  archiveStatus = 'A importar e verificar o arquivo…';
+  renderArchiveStatus();
+  try {
+    const response = await fetch('/api/import', {
+      method:'POST', headers:{'Content-Type':'application/x-xz'}, body:file
+    });
+    const data = await response.json();
+    if (!response.ok) throw Error(data.error);
+    archive = data;
+    archiveStatus = '';
+    if (activeView === 'archive') {
+      const alreadyShowing = dataset === 'archive';
+      showView('archive');
+      if (alreadyShowing) resetDataset();
+    }
+    clearArchiveMap();
+  } catch (error) {
+    archiveStatus = requestError(error);
+  } finally {
+    $('load-day').disabled = false;
+    renderArchiveStatus();
+  }
+};
+document.addEventListener('fluxo-languagechange', () => {
+  renderArchiveStatus();
+  renderMap();
+});
+initMaps();
 setLanguage(language);
 apply();
 </script>

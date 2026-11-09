@@ -1,7 +1,7 @@
 from contextlib import closing
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from ipaddress import IPv4Address, IPv4Network
+from ipaddress import IPv4Address, IPv4Network, ip_address
 from pathlib import Path
 from threading import BoundedSemaphore
 from time import monotonic, time
@@ -9,22 +9,28 @@ from urllib.parse import parse_qs, urlsplit
 import csv
 import io
 import json
-import os
+import logging
 import sqlite3
 import sys
 
 import dns.exception
-import dns.resolver
+
+from ptr import configured_resolvers, lookup
 
 ROOT = Path(__file__).parent
 DB = "file:/data/flows.sqlite3?mode=ro"
-SERVICES = json.loads(Path("/app/collector/port-services.json").read_text())
+SERVICE_FILE = ROOT.parent / "collector" / "port-services.json"
+if not SERVICE_FILE.is_file():
+    SERVICE_FILE = Path("/app/collector/port-services.json")
+SERVICES = json.loads(SERVICE_FILE.read_text())
 PROTOCOLS = {"1": "ICMP", "6": "TCP", "17": "UDP", "33": "DCCP",
              "47": "GRE", "50": "ESP", "51": "AH", "132": "SCTP"}
 WINDOWS = {15, 60, 360, 1440, 10080, 43200}
 EXPORT_LIMIT = 50_000
 QUERIES = BoundedSemaphore(2)
 LOOKUPS = BoundedSemaphore(4)
+NETWORK_PAGE_SIZE = 12
+LOG = logging.getLogger("fluxo.ptr")
 
 TOTALS = """
     coalesce(sum(CASE WHEN direction='up' THEN bytes ELSE 0 END),0) AS up,
@@ -62,12 +68,83 @@ def subnet(ip, prefix):
         return None
 
 
+def ipv4_number(address):
+    try:
+        return int(IPv4Address(address))
+    except (TypeError, ValueError):
+        return None
+
+
+def reported_hop(value):
+    try:
+        address = ip_address(value)
+    except (TypeError, ValueError):
+        return None
+    return None if address.is_unspecified else str(address)
+
+
+def flow_observation(db, args, params):
+    flow_id = int(args["flow_id"])
+    received = int(args.get("flow_received", 0))
+    if not (1 <= flow_id <= params["ceiling"] and params["start"] <= received < params["end"]):
+        raise ValueError("Este fluxo já não está disponível. Actualiza o painel.")
+    row = db.execute("""
+        SELECT received, router, direction, bytes, packets, flow
+        FROM records WHERE rowid=? AND received=?
+    """, (flow_id, received)).fetchone()
+    if row is None:
+        raise ValueError("Este fluxo já não está disponível. Actualiza o painel.")
+    observation = dict(row)
+    raw = json.loads(observation.pop("flow"))
+    for name, field in (("src", "src_addr"), ("dst", "dst_addr"), ("sport", "src_port"),
+                        ("dport", "dst_port"), ("sasn", "src_as"), ("dasn", "dst_as"),
+                        ("in_if", "in_if"), ("out_if", "out_if"),
+                        ("started", "time_flow_start_ns"), ("ended", "time_flow_end_ns")):
+        observation[name] = raw.get(field)
+    observation["next_hop"] = reported_hop(raw.get("next_hop"))
+    observation["bgp_next_hop"] = reported_hop(raw.get("bgp_next_hop"))
+    observation["proto"] = protocol(raw.get("proto"))
+    observation["service"] = service(observation["proto"], observation["dport"])
+    return observation
+
+
+def destination_map(db, base, params, target, page):
+    host = "/" not in target
+    try:
+        network = IPv4Network(target, strict=False)
+    except ValueError as exc:
+        raise ValueError("Indica um endereço IPv4 ou uma rede IPv4 em formato CIDR.") from exc
+    params = dict(params, address=str(network.network_address),
+                  first=int(network.network_address), last=int(network.broadcast_address),
+                  map_size=NETWORK_PAGE_SIZE, map_offset=(page - 1) * NETWORK_PAGE_SIZE)
+    peer = "CASE WHEN src=:address THEN dst ELSE src END" if host else "dst"
+    match = "(src=:address OR dst=:address)" if host else "ipv4_number(src) BETWEEN :first AND :last"
+    rows = [dict(row) for row in db.execute(base + f"""
+        SELECT {peer} AS peer, {TOTALS}, count(*) OVER () AS matches,
+               sum(sum(bytes)) OVER () AS network_total, max(sum(bytes)) OVER () AS peak,
+               sum(CASE WHEN src=:address THEN bytes ELSE 0 END) AS from_host,
+               sum(CASE WHEN src!=:address THEN bytes ELSE 0 END) AS to_host
+        FROM filtered
+        WHERE src IS NOT NULL AND dst IS NOT NULL AND {match}
+        GROUP BY 1
+        ORDER BY total DESC, peer
+        LIMIT :map_size OFFSET :map_offset
+    """, params)]
+    summary = rows[0] if rows else {"matches": 0, "network_total": 0, "peak": 0}
+    return {"target": str(network.network_address) if host else str(network),
+            "host": host, "rows": rows, "matches": summary["matches"],
+            "total": summary["network_total"], "peak": summary["peak"],
+            "page": page, "size": NETWORK_PAGE_SIZE,
+            "end": params["end"], "ceiling": params["ceiling"]}
+
+
 def connect(path=DB):
     db = sqlite3.connect(path, uri=True, timeout=3)
     db.row_factory = sqlite3.Row
     db.create_function("proto_name", 1, protocol, deterministic=True)
     db.create_function("service_name", 2, service, deterministic=True)
     db.create_function("subnet", 2, subnet, deterministic=True)
+    db.create_function("ipv4_number", 1, ipv4_number, deterministic=True)
     return db
 
 
@@ -129,6 +206,12 @@ def query(db, args, export=False, now=None):
           AND (:router='' OR router=:router) AND (:direction='' OR direction=:direction)
     ), filtered AS (SELECT * FROM base WHERE {match})
     """
+    if not export:
+        if "flow_id" in args:
+            return flow_observation(db, args, params)
+        if "network" in args:
+            return destination_map(db, base, params, args["network"], page)
+
     totals = dict(db.execute(base + f"SELECT {TOTALS} FROM filtered", params).fetchone())
     if export and group == "flow" and totals["flows"] > EXPORT_LIMIT:
         raise ValueError("A exportação excede 50 000 linhas. Reduz o período ou aplica um filtro.")
@@ -245,8 +328,11 @@ class Handler(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         if url.path == "/":
             return self.send(200, "text/html; charset=utf-8", (ROOT / "index.html").read_bytes())
-        if url.path == "/i18n.js":
-            return self.send(200, "application/javascript; charset=utf-8", (ROOT / "i18n.js").read_bytes())
+        if url.path in {"/i18n.js", "/visuals.js"}:
+            return self.send(200, "application/javascript; charset=utf-8",
+                             (ROOT / url.path[1:]).read_bytes())
+        if url.path == "/visuals.css":
+            return self.send(200, "text/css; charset=utf-8", (ROOT / "visuals.css").read_bytes())
         if url.path not in {"/api/view", "/api/export"}:
             return self.send_json(404, {"error": "Página inexistente."})
         if not QUERIES.acquire(blocking=False):
@@ -284,14 +370,15 @@ class Handler(BaseHTTPRequestHandler):
         if not LOOKUPS.acquire(blocking=False):
             return self.send_json(429, {"error": "DNS ocupado."})
         try:
-            servers = [ip.strip() for ip in os.getenv("PTR_DNS", "").split(",") if ip.strip()]
-            resolver = dns.resolver.Resolver(configure=not servers)
-            if servers:
-                resolver.nameservers = servers
-            name = str(resolver.resolve_address(ip, lifetime=2)[0].target).rstrip(".")
-        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
-            name = None
-        except dns.exception.DNSException:
+            name = lookup(ip, configured_resolvers())
+        except ValueError as exc:
+            LOG.warning("Invalid PTR_DNS configuration: %s", exc)
+            return self.send_json(503, {"error": "Configuração PTR_DNS inválida."})
+        except dns.exception.Timeout as exc:
+            LOG.warning("PTR lookup timed out: %s", exc)
+            return self.send_json(504, {"error": "O servidor DNS não respondeu a tempo."})
+        except dns.exception.DNSException as exc:
+            LOG.warning("PTR lookup failed: %s", exc)
             return self.send_json(502, {"error": "DNS indisponível."})
         finally:
             LOOKUPS.release()

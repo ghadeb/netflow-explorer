@@ -1,11 +1,3 @@
-services:
-  collector:
-    command: ["python", "-u", "/painel/start-archive.py"]
-    environment:
-      RETENTION_DAYS: "7"
-    volumes:
-      - archive-data:/archives
-
 volumes:
   archive-data:
     external: true

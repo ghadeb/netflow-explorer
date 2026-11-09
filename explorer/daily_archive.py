@@ -1,12 +1,9 @@
-import csv
 import hashlib
-import json
 import lzma
 import os
 import shutil
 import signal
 import sqlite3
-import subprocess
 import sys
 from contextlib import closing
 from datetime import UTC, datetime
@@ -21,7 +18,7 @@ import server as panel
 
 ROOT = Path("/archives")
 IMPORTS = ROOT / ".imports"
-LIVE = "file:/data/flows.sqlite3?mode=ro"
+LIVE_PATH = Path("/data/flows.sqlite3")
 DAY = 86400
 CHUNK = 1024 * 1024
 FIELDS = "received router direction client bytes packets flow".split()
@@ -29,6 +26,14 @@ COLUMNS = ",".join(FIELDS)
 MATCH = " AND ".join(f"a.{field}=r.{field}" for field in FIELDS)
 APP_ID = 1179408463
 UPLOAD = BoundedSemaphore(1)
+
+
+def live_uri():
+    return LIVE_PATH.as_uri() + "?mode=ro"
+
+
+def retention_days():
+    return int(os.environ.get("RETENTION_DAYS", "30"))
 
 
 def digest(stream):
@@ -103,7 +108,7 @@ def merge_day(raw, day):
             CREATE TABLE IF NOT EXISTS routers(address TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS archive_info(day INTEGER, rows INTEGER);
         """)
-        db.execute("ATTACH DATABASE ? AS live", (LIVE,))
+        db.execute("ATTACH DATABASE ? AS live", (live_uri(),))
         select = ",".join("r." + field for field in FIELDS)
         with db:
             added = db.execute(f"""
@@ -148,7 +153,7 @@ def publish(raw, destination, work):
 
 def expire_verified(raw, day):
     # Delete only exact copies. Late arrivals stay until they are archived.
-    with closing(sqlite3.connect("/data/flows.sqlite3", uri=True, timeout=5)) as db:
+    with closing(sqlite3.connect(LIVE_PATH, timeout=5)) as db:
         db.execute("ATTACH DATABASE ? AS saved", (raw.as_uri() + "?mode=ro&immutable=1",))
         while True:
             with db:
@@ -176,11 +181,40 @@ def expire_verified(raw, day):
         db.execute("PRAGMA incremental_vacuum(128)")
 
 
+def archive_day(day, destination, expire):
+    if destination.exists() and not expire:
+        return
+    with TemporaryDirectory(prefix=".build-", dir=ROOT) as folder:
+        work = Path(folder)
+        raw = work / "day.sqlite3"
+        if destination.exists():
+            with destination.open("rb") as stream:
+                unpack(stream, raw, destination.stat().st_size)
+            saved_day, _ = validate(raw)
+            if saved_day != day:
+                raise ValueError(f"Data inesperada em {destination.name}")
+            checksum = destination.with_name(destination.name + ".sha256")
+            if checksum.exists():
+                with destination.open("rb") as stream:
+                    if digest(stream) != checksum.read_text().partition(" ")[0]:
+                        raise ValueError(f"SHA-256 inválido em {destination.name}")
+
+        added = merge_day(raw, day)
+        if not added and not destination.exists():
+            return
+        _, count = validate(raw)
+        if added:
+            publish(raw, destination, work)
+            print(f"Arquivo verificado: {destination.name} · {count} registos", flush=True)
+        if expire:
+            expire_verified(raw, day)
+
+
 def archive_pass():
     now = int(time())
     complete = ((now - 900) // DAY) * DAY
-    independent = ROOT.stat().st_dev != Path("/data").stat().st_dev
-    with closing(sqlite3.connect(LIVE, uri=True, timeout=5)) as source:
+    cutoff = now - retention_days() * DAY
+    with closing(sqlite3.connect(live_uri(), uri=True, timeout=5)) as source:
         oldest = source.execute("SELECT min(received) FROM records").fetchone()[0]
     if oldest is None:
         return
@@ -188,108 +222,20 @@ def archive_pass():
     for day in range(oldest // DAY * DAY, complete, DAY):
         date = datetime.fromtimestamp(day, UTC).date().isoformat()
         destination = ROOT / f"fluxo-{date}.sqlite3.xz"
-        expire = independent and day + DAY <= now - 7 * DAY
-        if destination.exists() and not expire:
-            continue
-        with TemporaryDirectory(prefix=".build-", dir=ROOT) as folder:
-            work = Path(folder)
-            raw = work / "day.sqlite3"
-            if destination.exists():
-                with destination.open("rb") as stream:
-                    unpack(stream, raw, destination.stat().st_size)
-                saved_day, _ = validate(raw)
-                if saved_day != day:
-                    raise ValueError(f"Data inesperada em {destination.name}")
-                checksum = destination.with_name(destination.name + ".sha256")
-                if checksum.exists():
-                    with destination.open("rb") as stream:
-                        if digest(stream) != checksum.read_text().split()[0]:
-                            raise ValueError(f"SHA-256 inválido em {destination.name}")
-
-            added = merge_day(raw, day)
-            if not added and not destination.exists():
-                continue
-            _, count = validate(raw)
-            if added:
-                publish(raw, destination, work)
-                print(f"Arquivo verificado: {destination.name} · {count} registos", flush=True)
-            if expire:
-                expire_verified(raw, day)
+        try:
+            archive_day(day, destination, day + DAY <= cutoff)
+        except (OSError, ValueError, EOFError, lzma.LZMAError, sqlite3.Error) as exc:
+            print(f"Falha no arquivo {destination.name}: {exc}", file=sys.stderr, flush=True)
 
 
 def worker():
     os.nice(10)
-    if ROOT.stat().st_dev == Path("/data").stat().st_dev:
-        print("Arquivo no mesmo sistema de ficheiros. Expiração suspensa.", flush=True)
     while True:
         try:
             archive_pass()
-        except Exception as exc:
+        except (OSError, ValueError, sqlite3.Error) as exc:
             print(f"Falha no arquivo diário: {exc}", file=sys.stderr, flush=True)
         sleep(900)
-
-
-CONTROLS = r"""
-<script>
-(() => {
-  const bar = document.createElement('div');
-  bar.className = 'card';
-  bar.style.marginBottom = '12px';
-  bar.innerHTML = '<strong id="source-mode">Em directo · últimos 7 dias</strong> ' +
-    '<button type="button" id="load-day" data-i18n>↑ Importar arquivo .xz</button> ' +
-    '<button type="button" id="back-live" data-i18n hidden>Voltar ao directo</button>' +
-    '<input type="file" id="day-file" accept=".xz,application/x-xz" hidden>';
-  form.before(bar);
-  form.elements.minutes.querySelector('option[value="43200"]')?.remove();
-  const original = params;
-  let archive = null;
-  function renderSource() {
-    $('source-mode').textContent = archive
-      ? t('Arquivo UTC') + ' · ' + archive.date
-      : t('Em directo · últimos 7 dias');
-  }
-  localize(bar);
-  renderSource();
-  document.addEventListener('fluxo-languagechange', renderSource);
-  params = (page, charts) => {
-    const p = original(page, charts);
-    if (archive) p.set('archive', archive.id);
-    return p;
-  };
-  $('load-day').onclick = () => $('day-file').click();
-  $('day-file').onchange = async () => {
-    const file = $('day-file').files[0];
-    $('day-file').value = '';
-    if (!file) return;
-    $('load-day').disabled = true;
-    status('A importar e verificar o arquivo…');
-    try {
-      const response = await fetch('/api/import', {
-        method: 'POST', headers: {'Content-Type': 'application/x-xz'}, body: file
-      });
-      const result = await response.json();
-      if (!response.ok) throw Error(result.error);
-      archive = result;
-      renderSource();
-      $('back-live').hidden = false;
-      form.elements.minutes.value = '1440';
-      apply();
-    } catch (error) {
-      status(requestError(error), true);
-    } finally {
-      $('load-day').disabled = false;
-    }
-  };
-  $('back-live').onclick = () => {
-    archive = null;
-    renderSource();
-    $('back-live').hidden = true;
-    form.elements.minutes.value = '60';
-    apply();
-  };
-})();
-</script>
-"""
 
 
 def handler(base):
@@ -301,10 +247,10 @@ def handler(base):
                 return self.send_json(429, {"error": "Já está a decorrer uma importação."})
             try:
                 length = int(self.headers.get("Content-Length", 0))
-                budget = min(16 * 1024 * CHUNK, shutil.disk_usage(ROOT).free - 2 * 1024 * CHUNK)
+                budget = shutil.disk_usage(ROOT).free - 2 * 1024 * CHUNK
                 if (self.headers.get_content_type() != "application/x-xz"
-                        or not 0 < length <= min(budget, 2 * 1024 * CHUNK)):
-                    raise ValueError("Escolhe um arquivo XZ até 2 GiB com espaço suficiente no disco.")
+                        or not 0 < length <= budget):
+                    raise ValueError("Escolhe um arquivo XZ com espaço suficiente no disco.")
                 IMPORTS.mkdir(mode=0o700, exist_ok=True)
                 token = uuid4().hex
                 with TemporaryDirectory(prefix=".upload-", dir=IMPORTS) as directory:
@@ -325,10 +271,6 @@ def handler(base):
 
         def do_GET(self):
             url = urlsplit(self.path)
-            if url.path == "/":
-                html = (panel.ROOT / "index.html").read_text()
-                html = html.replace("</html>", CONTROLS + "</html>", 1)
-                return self.send(200, "text/html; charset=utf-8", html.encode())
             if url.path not in {"/api/view", "/api/export"}:
                 return super().do_GET()
 
@@ -337,8 +279,8 @@ def handler(base):
                     url.query, max_num_fields=16).items()}
                 token = args.pop("archive", "")
                 if not token:
-                    if int(args.get("minutes", 60)) > 10080:
-                        raise ValueError("A consulta em directo abrange até 7 dias.")
+                    if int(args.get("minutes", 60)) > retention_days() * 1440:
+                        raise ValueError("O período excede a retenção em directo.")
                     return super().do_GET()
                 if len(token) != 32 or any(ch not in "0123456789abcdef" for ch in token):
                     raise ValueError("Arquivo inválido.")

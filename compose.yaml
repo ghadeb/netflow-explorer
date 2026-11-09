@@ -20,6 +20,7 @@ services:
       - "${NETFLOW_WEB_BIND:-127.0.0.1}:8001:8000/tcp"
     volumes:
       - sqlite-data:/data
+      - archive-data:/archives
       - type: bind
         source: ./tls-fluxo
         target: /tls
@@ -40,3 +41,5 @@ services:
 
 volumes:
   sqlite-data:
+  archive-data:
+    name: "${FLOW_ARCHIVE_VOLUME:-fluxo-archives}"

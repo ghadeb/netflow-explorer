@@ -5,7 +5,7 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
 
 RUN addgroup -g 10001 fluxo && adduser -u 10001 -G fluxo -D fluxo \
-    && mkdir /data && chown fluxo:fluxo /data
+    && mkdir /data /archives && chown fluxo:fluxo /data /archives
 COPY collector/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY --from=decoder /goflow2 /usr/local/bin/goflow2
@@ -13,4 +13,4 @@ COPY collector ./collector
 COPY explorer /painel
 
 USER fluxo
-CMD ["python", "-u", "/painel/start-collector.py"]
+CMD ["python", "-u", "/painel/start-archive.py"]

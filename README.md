@@ -196,30 +196,57 @@ curl --cacert tls-fluxo/cert.pem https://192.0.2.20:8001/healthz
 
 O acesso directo destina-se à rede privada e a configuração base usa TLS sem login.
 
-## 5. Perfil de arquivo diário
+## 5. Painel e arquivos diários
 
-O [perfil de arquivo](compose.archives.yaml) inclui a proposta de sete dias de consulta
-em directo, exportação por dia UTC em `sqlite3.xz` e importação pelo painel. Esta
-proposta está preservada no repositório para validação no servidor.
+- **Em directo** mostra os dados recentes, a distribuição do volume por porto e
+  serviço e a repartição de bytes enviados e recebidos. Actualiza a cada
+  dez minutos e também com **Actualizar agora**, mantendo os filtros aplicados.
+- **Arquivos** abre um ficheiro diário `fluxo-AAAA-MM-DD.sqlite3.xz`. O contentor
+  verifica e abre uma cópia para pesquisa, gráficos e CSV. A importação mantém o
+  SQLite activo separado e substitui o arquivo de consulta anterior.
+- **Weathermap** mostra os pares de um host IPv4 nos dois sentidos ou os destinos
+  de uma rede de origem CIDR, paginados por volume. Em fluxos individuais,
+  **Ver mapa** mostra os endpoints, o exporter e o próximo salto ou interfaces
+  quando exportados. As linhas tracejadas assinalam troços sem visibilidade.
+  O mapa usa a origem de dados e os filtros do painel seleccionado.
 
-O arquivo usa um volume Docker existente, configurado por `FLOW_ARCHIVE_VOLUME`,
-com acesso de escrita para UID/GID 10001. Para permitir expiração, o volume deve
-estar num sistema de ficheiros separado do SQLite activo. A rotina verifica o
-arquivo e compara as linhas antes de expirar dados. O perfil base continua a usar
-o valor `RETENTION_DAYS` configurado.
-
-A configuração do perfil pode ser validada em separado:
+Para resolver um PTR a pedido, configura os resolvedores internos em `PTR_DNS`
+no `.env`, separados por vírgulas. O contentor tem de os alcançar pela porta 53.
+O diagnóstico seguinte usa os mesmos resolvedores e regras que o botão PTR.
+Substitui o IP do exemplo por um endereço com PTR conhecido.
 
 ```sh
-docker compose -f compose.yaml -f compose.archives.yaml config -q
+docker compose exec -T collector python /painel/ptr.py 192.0.2.11
+```
+
+A recolha mantém por omissão 30 dias de consulta no SQLite. O processo de
+arquivo cria um `sqlite3.xz` por dia UTC com registos e um ficheiro SHA-256
+no volume `fluxo-archives` (montado em `/archives`). A compressão usa XZ no
+nível 9 com o modo extreme. O processo verifica os dias completos após as
+00:15 UTC e recupera os dias em falta que ainda existam no SQLite. Um dia só
+pode ser removido do SQLite quando estiver inteiramente fora da retenção e as
+linhas constarem do arquivo verificado.
+
+`FLOW_ARCHIVE_VOLUME` permite indicar outro volume. Para um volume externo
+já existente, conserva o override `-f compose.yaml -f compose.archives.yaml`
+e confirma acesso de escrita para UID/GID 10001. Os ficheiros arquivados
+não expiram automaticamente. Para copiar um dia do volume para o servidor e
+depois o abrir no painel, ajusta a data deste exemplo.
+
+```sh
+docker compose cp collector:/archives/fluxo-2026-11-08.sqlite3.xz .
 ```
 
 ## Capacidade e retenção
 
-SQLite usa WAL, um escritor e agregados por minuto. A expiração corre a cada minuto e reutiliza espaço na base. O tamanho depende dos registos por segundo e da cardinalidade de IPs e portos. Após o primeiro período representativo, mede a variação de `du -h /data` no contentor e estima a capacidade para 30 dias, incluindo margem para o WAL e para backups. Uma janela de 30 dias com detalhe por porto pode exceder o tempo de consulta em instalações de grande volume. Os fluxos continuam disponíveis na base enquanto estiverem dentro da retenção.
+SQLite usa WAL, um escritor e agregados por minuto. A expiração reutiliza
+espaço na base. O tamanho depende dos registos por segundo e do número de
+IPs e portos distintos. A exportação precisa de espaço temporário para o
+SQLite de um dia e o respectivo XZ. Uma consulta de 30 dias pode exceder o
+tempo limite em instalações de grande volume. Reduz o período ou aplica filtros.
 
 ```sh
-docker compose exec collector du -h /data
+docker compose exec collector du -h /data /archives
 docker compose logs --tail=100 collector
 ```
 
