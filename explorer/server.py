@@ -328,6 +328,13 @@ class Handler(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         if url.path == "/":
             return self.send(200, "text/html; charset=utf-8", (ROOT / "index.html").read_bytes())
+        if url.path == "/logo.png":
+            return self.send(200, "image/png", (ROOT / "logo.png").read_bytes())
+        if url.path == "/license":
+            license_path = ROOT / "LICENSE"
+            if not license_path.is_file():
+                license_path = ROOT.parent / "LICENSE"
+            return self.send(200, "text/plain; charset=utf-8", license_path.read_bytes())
         if url.path in {"/i18n.js", "/visuals.js"}:
             return self.send(200, "application/javascript; charset=utf-8",
                              (ROOT / url.path[1:]).read_bytes())
@@ -418,5 +425,5 @@ if __name__ == "__main__":
     if "--check" in sys.argv:
         check()
     else:
-        print("Fluxo Explorer a escutar em 8000")
+        print("NetFlow Explorer listening on port 8000")
         ThreadingHTTPServer(("0.0.0.0", 8000), Handler).serve_forever()

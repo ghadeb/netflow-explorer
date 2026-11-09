@@ -1,6 +1,7 @@
 const FluxoI18n = (() => {
   const english = {
     'Idioma': 'Language',
+    'Licença MIT': 'MIT License',
     'Padrões': 'Patterns',
     'Fluxos': 'Flows',
     'Explorador de tráfego': 'Traffic explorer',

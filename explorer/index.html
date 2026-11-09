@@ -2,13 +2,16 @@
 <html lang="pt-PT">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Fluxo Explorer</title>
+<title>NetFlow Explorer</title>
+<link rel="icon" type="image/png" href="/logo.png">
 <style>
 :root{color-scheme:dark;--bg:#09111d;--panel:#101d2e;--line:#23354b;--text:#edf4fc;--muted:#9aacc1;--up:#38d8b0;--down:#8da8ff;--accent:#f9bd72}
 *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,sans-serif}
 header{border-bottom:1px solid var(--line);background:#0c1726}
 .wrap{width:min(1540px,100% - 40px);margin:auto}.mast{display:flex;align-items:center;justify-content:space-between;padding:15px 0}
-.brand{font-weight:800;letter-spacing:.06em}.brand b{color:var(--up);margin-right:7px}
+.brand{display:flex;align-items:center;gap:8px;font-weight:800;letter-spacing:.025em}
+.brand img{display:block}
+.site-footer{border-top:1px solid var(--line);color:var(--muted);padding:15px 0;font-size:13px}
 nav{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:12px}a{color:var(--muted);text-decoration:none}a:hover{color:var(--text)}
 main{padding:28px 0 50px}h1{font-size:clamp(34px,5vw,58px);letter-spacing:-.055em;line-height:1;margin:0 0 9px}
 h2,h3,p{margin:0}h2{font-size:24px}h3{font-size:16px}
@@ -47,7 +50,7 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
 <link rel="stylesheet" href="/visuals.css">
 
 <header><div class="wrap mast">
-  <div class="brand"><b>◈</b> FLUXO EXPLORER</div>
+  <div class="brand"><img src="/logo.png" width="36" height="36" alt="">NetFlow Explorer</div>
   <nav>
     <button type="button" data-view="live" aria-current="page" data-i18n>Em directo</button>
     <button type="button" data-view="archive" data-i18n>Arquivos</button>
@@ -153,6 +156,9 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
   </section>
   </div>
 </main>
+<footer class="site-footer">
+  <div class="wrap"><a href="https://pt.linkedin.com/company/takesignal">Takesignal</a> · <a href="/license" data-i18n>Licença MIT</a></div>
+</footer>
 
 <template id="page-picker-template">
   <details class="page-picker">

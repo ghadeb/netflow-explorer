@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY --from=decoder /goflow2 /usr/local/bin/goflow2
 COPY collector ./collector
 COPY explorer /painel
+COPY LICENSE /painel/LICENSE
+COPY licenses/goflow2.txt /usr/share/licenses/goflow2/LICENSE
 
 USER fluxo
 CMD ["python", "-u", "/painel/start-archive.py"]
