@@ -25,7 +25,7 @@ class ExplorerTest(TestCase):
             INSERT INTO routers VALUES ('192.0.2.1');
         """)
 
-    def add_flow(self, src="10.20.30.15", dst="198.51.100.1", size=400,
+    def add_flow(self, src="203.0.113.15", dst="198.51.100.1", size=400,
                  direction="up", **fields):
         data = dict(src_addr=src, dst_addr=dst, src_port=45000, dst_port=443,
                     proto="TCP", **fields)
@@ -37,7 +37,7 @@ class ExplorerTest(TestCase):
     def test_single_flow_has_only_reported_hops(self):
         row = self.add_flow(next_hop="192.0.2.8", bgp_next_hop="0.0.0.0", in_if=6)
         flow = server.query(self.db, {"flow_id": str(row), "flow_received": str(NOW-5)}, now=NOW)
-        self.assertEqual(flow["src"], "10.20.30.15")
+        self.assertEqual(flow["src"], "203.0.113.15")
         self.assertEqual(flow["dst"], "198.51.100.1")
         self.assertEqual(flow["next_hop"], "192.0.2.8")
         self.assertIsNone(flow["bgp_next_hop"])
@@ -68,12 +68,12 @@ class ExplorerTest(TestCase):
     def test_network_map_aggregates_sources_and_pages_destinations(self):
         for offset in range(1, 15):
             self.add_flow(dst=f"198.51.100.{offset}", size=offset)
-        self.add_flow(src="10.20.30.200", dst="198.51.100.14", size=10)
-        self.add_flow(src="10.20.31.1", dst="198.51.100.200", size=1000)
-        args = {"network": "10.20.30.20/24"}
+        self.add_flow(src="203.0.113.200", dst="198.51.100.14", size=10)
+        self.add_flow(src="192.0.2.251", dst="198.51.100.200", size=1000)
+        args = {"network": "203.0.113.20/24"}
         first = server.query(self.db, args, now=NOW)
         second = server.query(self.db, {**args, "page": "2"}, now=NOW)
-        self.assertEqual(first["target"], "10.20.30.0/24")
+        self.assertEqual(first["target"], "203.0.113.0/24")
         self.assertEqual(first["matches"], 14)
         self.assertEqual(first["rows"][0]["peer"], "198.51.100.14")
         self.assertEqual(first["rows"][0]["total"], 24)
@@ -84,14 +84,14 @@ class ExplorerTest(TestCase):
     def test_network_map_respects_query_filters_and_window(self):
         self.add_flow(dst="198.51.100.1", direction="down")
         self.add_flow(dst="198.51.100.2")
-        data = server.query(self.db, {"network":"10.20.30.0/24", "direction":"up",
+        data = server.query(self.db, {"network":"203.0.113.0/24", "direction":"up",
                                      "q":"dst:198.51.100.2"}, now=NOW)
         self.assertEqual([row["peer"] for row in data["rows"]], ["198.51.100.2"])
 
     def test_host_map_groups_both_directions_by_peer(self):
-        self.add_flow(src="10.20.30.1", dst="198.51.100.3", size=20)
-        self.add_flow(src="198.51.100.3", dst="10.20.30.1", size=50, direction="down")
-        data = server.query(self.db, {"network": "10.20.30.1"}, now=NOW)
+        self.add_flow(src="203.0.113.1", dst="198.51.100.3", size=20)
+        self.add_flow(src="198.51.100.3", dst="203.0.113.1", size=50, direction="down")
+        data = server.query(self.db, {"network": "203.0.113.1"}, now=NOW)
         self.assertTrue(data["host"])
         self.assertEqual(data["matches"], 1)
         peer = data["rows"][0]

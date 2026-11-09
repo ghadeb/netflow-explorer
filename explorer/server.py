@@ -400,20 +400,20 @@ def check():
             CREATE TABLE routers(address);
             INSERT INTO routers VALUES ('192.0.2.1');
         """)
-        sent = dict(src_addr="10.0.0.25", dst_addr="198.51.100.8",
+        sent = dict(src_addr="203.0.113.25", dst_addr="198.51.100.8",
                     src_port=50000, dst_port=443, proto="TCP", dst_as=64500)
-        received = dict(src_addr="198.51.100.8", dst_addr="10.0.0.25",
+        received = dict(src_addr="198.51.100.8", dst_addr="203.0.113.25",
                         src_port=443, dst_port=50000, proto=6, src_as=64500)
         for direction, size, flow in [("up", 4, sent), ("down", 30, received)]:
             db.execute("INSERT INTO records VALUES (?,?,?,?,?,?,?)",
-                       (now-1, "192.0.2.1", direction, "10.0.0.25", size, 1, json.dumps(flow)))
+                       (now-1, "192.0.2.1", direction, "203.0.113.25", size, 1, json.dumps(flow)))
         view = query(db, {}, now=now)
         assert view["totals"]["up"] == 4 and view["totals"]["down"] == 30
         assert view["rows"][0]["sasn"] == 64500 and view["rows"][1]["service"] == "https"
         assert view["charts"]["asn"][0]["key"] == "AS64500"
         grouped = query(db, {"group":"srcnet", "q":"port:TCP/443"}, now=now)
-        assert grouped["rows"][0]["key"] == "10.0.0.0/24"
-        assert "10.0.0.25" in csv_bytes(view["rows"], "flow").decode("utf-8-sig")
+        assert grouped["rows"][0]["key"] == "203.0.113.0/24"
+        assert "203.0.113.25" in csv_bytes(view["rows"], "flow").decode("utf-8-sig")
     with closing(connect()) as live:
         row = live.execute("SELECT received, json_extract(flow,'$.src_addr') FROM records ORDER BY rowid DESC LIMIT 1").fetchone()
         if row is None:

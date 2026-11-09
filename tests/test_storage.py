@@ -8,7 +8,7 @@ from collector.storage import dashboard, ingest, open_db, prune
 NOW = 1_800_000_060
 ROUTER = "192.0.2.1"
 OTHER = "192.0.2.2"
-CLIENT = "10.0.0.25"
+CLIENT = "203.0.113.25"
 
 
 def flow(direction, count, router=ROUTER, at=NOW, client=CLIENT, **extra):
@@ -35,7 +35,7 @@ class StorageTest(unittest.TestCase):
         self.addCleanup(self.db.close)
 
     def test_combines_upload_source_and_download_destination(self):
-        events = [flow("up", 4), flow("down", 30), flow("up", 19, client="10.0.0.26")]
+        events = [flow("up", 4), flow("down", 30), flow("up", 19, client="203.0.113.26")]
         self.assertEqual(ingest(self.db, events, {ROUTER}), 3)
         view = dashboard(self.db, NOW, 60, ROUTER)
         self.assertEqual(view["totals"], {"up": 23, "down": 30, "flows": 3})
@@ -77,11 +77,11 @@ class StorageTest(unittest.TestCase):
     def test_network_groups_actual_source_in_both_directions(self):
         ingest(self.db, [
             flow("up", 4),
-            flow("up", 8, client="10.0.0.31"),
+            flow("up", 8, client="203.0.113.31"),
             flow("down", 30),
         ], {ROUTER})
         view = dashboard(self.db, NOW, 15, None, prefix=24)
         self.assertEqual(view["talkers"], [
             {"ip": "198.51.100.0/24", "up": 0, "down": 30},
-            {"ip": "10.0.0.0/24", "up": 12, "down": 0},
+            {"ip": "203.0.113.0/24", "up": 12, "down": 0},
         ])

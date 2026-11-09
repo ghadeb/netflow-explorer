@@ -23,5 +23,5 @@ test('live and archive messages translate while flow data stays intact', () => {
   assert.equal(translate('Fluxos individuais', 'pt'), 'Fluxos individuais');
   assert.equal(translate('Importação recusada. Arquivo XZ incompleto.', 'en'),
     'Import rejected. Incomplete XZ archive.');
-  assert.equal(translate('10.0.0.25:443', 'en'), '10.0.0.25:443');
+  assert.equal(translate('203.0.113.25:443', 'en'), '203.0.113.25:443');
 });

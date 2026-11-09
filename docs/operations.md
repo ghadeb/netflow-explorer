@@ -87,10 +87,10 @@ end
 
 ## Verify ingestion and capture evidence
 
-If the database is empty, check datagram arrival, exporter source addresses and template transmission.
+If the database is empty, check datagram arrival, exporter source addresses and template transmission. Replace `eth0` with the server interface that receives the exports.
 
 ```sh
-sudo tcpdump -ni <server-interface> -c 20 'udp dst port 2055 or udp dst port 2056'
+sudo tcpdump -ni eth0 -c 20 'udp dst port 2055 or udp dst port 2056'
 docker compose logs --tail=100 collector
 ```
 
@@ -133,7 +133,12 @@ with TemporaryDirectory() as directory:
     with path.open("rb") as stream:
         shutil.copyfileobj(stream, sys.stdout.buffer)
 PY
-if [ "$?" -eq 0 ]; then sha256sum "$snapshot" > "$snapshot.sha256"; fi
+status=$?
+if [ "$status" -eq 0 ]; then
+  sha256sum "$snapshot" > "$snapshot.sha256"
+else
+  printf 'Snapshot failed. The output file may be incomplete.\n' >&2
+fi
 ```
 
 ## Check HTTPS and PTR
@@ -152,7 +157,7 @@ For the PTR test, use an address with a known reverse record. The container must
 Set `FLOW_ARCHIVE_VOLUME` to override the archive volume name. To use an existing external Docker volume, run Compose with `-f compose.yaml -f compose.archives.yaml` and confirm write access for UID/GID 10001.
 
 ```sh
-docker compose cp collector:/archives/fluxo-2026-11-08.sqlite3.xz .
+docker compose cp collector:/archives/fluxo-YYYY-MM-DD.sqlite3.xz .
 docker compose exec collector du -h /data /archives
 docker compose logs --tail=100 collector
 ```

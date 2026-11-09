@@ -1,4 +1,4 @@
-"""Integration check for a disposable Linux container with no published ports."""
+"""Isolated UDP and SQLite integration check using the collector's legacy HTTP API."""
 from contextlib import closing
 from ipaddress import IPv4Address
 import json
@@ -47,8 +47,8 @@ def main():
             else:
                 raise RuntimeError("collector did not become ready")
             pairs = [
-                ("127.0.0.1", 2055, "10.10.10.25", "198.51.100.9", 443, 4000),
-                ("127.0.0.2", 2056, "198.51.100.9", "10.10.10.25", 55000, 30000),
+                ("127.0.0.1", 2055, "203.0.113.25", "198.51.100.9", 443, 4000),
+                ("127.0.0.2", 2056, "198.51.100.9", "203.0.113.25", 55000, 30000),
             ]
             for sender, port, source, destination, dst_port, size in pairs:
                 with closing(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) as udp:
@@ -62,8 +62,8 @@ def main():
                         break
                     sleep(0.1)
                 assert [tuple(row) for row in rows] == [
-                    ("127.0.0.1", "up", "10.10.10.25", 4000),
-                    ("127.0.0.2", "down", "10.10.10.25", 30000),
+                    ("127.0.0.1", "up", "203.0.113.25", 4000),
+                    ("127.0.0.2", "down", "203.0.113.25", 30000),
                 ], [tuple(row) for row in rows]
             with urlopen("http://127.0.0.1:8000/api/dashboard?ports=1", timeout=2) as response:
                 view = json.load(response)

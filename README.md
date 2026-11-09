@@ -44,14 +44,14 @@ Cisco's NetFlow v9 export format is documented in an Informational RFC. IPFIX is
 
 Use a **Linux AMD64** server with Docker Engine, the Compose plugin and OpenSSL. Run these steps from the repository directory.
 
-1. Copy `.env.example` to `.env`. Set `FLOW_EXPORTERS` to the comma-separated source IPv4 addresses of your exporters. Set `NETFLOW_UDP_BIND` to the server IPv4 address they can reach and `NETFLOW_WEB_BIND` to the private dashboard address. Optionally set `PTR_DNS` to comma-separated resolver addresses.
+1. Copy `.env.example` to `.env`. Set `FLOW_EXPORTERS` to the comma-separated source IPv4 addresses of your exporters. Set `NETFLOW_UDP_BIND` to the server IPv4 address they can reach and `NETFLOW_WEB_BIND` to the private dashboard address. Replace the documentation addresses in the example before starting the collector. Optionally set `PTR_DNS` to comma-separated resolver addresses.
 2. Prepare HTTPS before starting the collector. Replace the example with the IPv4 address or DNS name you will use to open the dashboard.
 
    ```sh
    ./scripts/tls.sh 192.0.2.20
    ```
 
-   The script creates a self-signed certificate when a pair is absent and verifies the identity, validity and key match on subsequent runs. To use a private CA, place the server certificate and intermediates in `tls-fluxo/cert.pem`, the unencrypted PEM key in `tls-fluxo/key.pem`, and the root CA in `tls-fluxo/ca.pem`. The script verifies that chain. For a DNS identity, also set `TLS_VERIFY_HOST` in `.env`.
+   With an empty TLS directory, the script creates a self-signed certificate. It also verifies an existing certificate's identity, validity and key match. To use a private CA, place the server certificate and intermediates in `tls-fluxo/cert.pem`, the unencrypted PEM key in `tls-fluxo/key.pem`, and the root CA in `tls-fluxo/ca.pem`. The script verifies that chain. For a DNS identity, also set `TLS_VERIFY_HOST` in `.env`.
 
 3. Build and start the collector.
 

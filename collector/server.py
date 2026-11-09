@@ -33,7 +33,7 @@ class Handler(BaseHTTPRequestHandler):
     timeout = 10
 
     def log_message(self, *_args):
-        # The reverse proxy controls access. Avoid writing addresses from URL filters to logs.
+        # URL filters can contain network addresses. Keep them out of the logs.
         pass
 
     def send_payload(self, status, content_type, data):

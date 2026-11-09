@@ -9,7 +9,7 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     environment:
-      FLOW_EXPORTERS: ${FLOW_EXPORTERS:?Configura os IP de origem dos exporters}
+      FLOW_EXPORTERS: ${FLOW_EXPORTERS:?Set the exporter source IPv4 addresses}
       RETENTION_DAYS: ${RETENTION_DAYS:-30}
       PTR_DNS: ${PTR_DNS:-}
       TLS_VERIFY_HOST: ${TLS_VERIFY_HOST:-}
