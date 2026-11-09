@@ -12,6 +12,8 @@ services:
       FLOW_EXPORTERS: ${FLOW_EXPORTERS:?Configura os IP de origem dos exporters}
       RETENTION_DAYS: ${RETENTION_DAYS:-30}
       PTR_DNS: ${PTR_DNS:-}
+      TLS_VERIFY_HOST: ${TLS_VERIFY_HOST:-}
+      NETFLOW_WEB_BIND: ${NETFLOW_WEB_BIND:-127.0.0.1}
     ports:
       - "${NETFLOW_UDP_BIND:-127.0.0.1}:2055:2055/udp"
       - "${NETFLOW_UDP_BIND:-127.0.0.1}:2056:2056/udp"
@@ -27,7 +29,7 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import ssl; from urllib.request import urlopen; urlopen('https://127.0.0.1:8000/healthz', context=ssl.create_default_context(cafile='/tls/cert.pem'), timeout=2).close()"]
+      test: ["CMD", "python", "/painel/healthcheck.py"]
       interval: 20s
       timeout: 4s
       retries: 3

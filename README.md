@@ -1,6 +1,6 @@
 # NetFlow Reporter
 
-Fluxo Explorer é o painel desta versão. Apresenta fluxos individuais, gráficos de padrões, pesquisa, paginação, agregações, ASN quando exportado, PTR a pedido e exportação CSV. O mesmo serviço `collector` recebe NetFlow e serve HTTPS na porta 8001.
+Fluxo Explorer é o painel desta versão. Apresenta fluxos individuais, gráficos de padrões, pesquisa, paginação, agregações, ASN quando exportado, PTR a pedido e exportação CSV. O mesmo serviço `collector` recebe NetFlow e serve HTTPS na porta 8001. O selector no cabeçalho alterna entre Português e English e guarda a preferência no navegador.
 
 O GoFlow2 recebe NetFlow v9 IPv4 em UDP/2055 e UDP/2056. O serviço `collector` grava cada registo aceite em SQLite com o exportador, o sentido, os contadores e o JSON normalizado pelo GoFlow2. A base fica no volume persistente `fluxo_sqlite-data`. A retenção predefinida é de 30 dias a partir da recepção.
 
@@ -166,38 +166,35 @@ PY
 sha256sum "$snapshot" > "$snapshot.sha256"
 ```
 
-## 4. Configurar o HTTPS
+## 4. Configurar e verificar o HTTPS
 
-Coloca o certificado PEM em `tls-fluxo/cert.pem` e a chave em `tls-fluxo/key.pem`.
-O certificado autoassinado deve incluir no SAN o IP privado do painel e `127.0.0.1`
-para a verificação de saúde do serviço. O contentor usa UID e GID 10001.
-
-Para gerar um certificado autoassinado de teste, substitui o IP de exemplo e executa no servidor:
+Antes de arrancar, corre na raiz do repositório no servidor. Substitui o endereço
+de exemplo pelo IPv4 ou nome DNS que vais usar para abrir o painel.
 
 ```sh
-ip=192.0.2.20
-mkdir -p tls-fluxo
-(
-  umask 077
-  openssl req -x509 -newkey rsa:3072 -nodes -sha256 -days 365 \
-    -keyout tls-fluxo/key.pem -out tls-fluxo/cert.pem \
-    -subj "/CN=$ip" \
-    -addext "subjectAltName=IP:$ip,IP:127.0.0.1" \
-    -addext 'basicConstraints=critical,CA:FALSE' \
-    -addext 'extendedKeyUsage=serverAuth'
-)
-sudo chgrp 10001 tls-fluxo tls-fluxo/key.pem
-chmod 750 tls-fluxo
-chmod 640 tls-fluxo/key.pem
-chmod 644 tls-fluxo/cert.pem
+./scripts/tls.sh 192.0.2.20
 ```
 
-Usa `tls-fluxo/cert.pem` como âncora de confiança para este certificado.
+O comando gera um certificado autoassinado quando ainda não existe um par,
+ou verifica o par existente. Confirma a validade, o endereço ou nome do painel e
+a correspondência com a chave privada. Os ficheiros ficam em
+`tls-fluxo/cert.pem` e `tls-fluxo/key.pem`. O contentor lê a chave com GID 10001.
+
+Para usar a tua CA, coloca o certificado do servidor e os intermédios em
+`tls-fluxo/cert.pem`, a chave PEM sem passphrase em `tls-fluxo/key.pem` e a CA
+raiz em `tls-fluxo/ca.pem`. Corre o mesmo comando para validar a cadeia.
+Se o certificado for para um nome DNS, coloca esse nome em `TLS_VERIFY_HOST`
+no `.env`. Por omissão, o healthcheck usa `NETFLOW_WEB_BIND` para verificar o
+certificado apresentado pelo contentor.
+
+Depois de arrancar, verifica a ligação usando o ficheiro de confiança indicado
+pelo script. O exemplo usa o certificado autoassinado:
+
+```sh
+curl --cacert tls-fluxo/cert.pem https://192.0.2.20:8001/healthz
+```
+
 O acesso directo destina-se à rede privada e a configuração base usa TLS sem login.
-
-```sh
-curl --cacert tls-fluxo/cert.pem "https://${ip}:8001/healthz"
-```
 
 ## 5. Perfil de arquivo diário
 

@@ -236,13 +236,21 @@ CONTROLS = r"""
   bar.className = 'card';
   bar.style.marginBottom = '12px';
   bar.innerHTML = '<strong id="source-mode">Em directo · últimos 7 dias</strong> ' +
-    '<button type="button" id="load-day">↑ Importar arquivo .xz</button> ' +
-    '<button type="button" id="back-live" hidden>Voltar ao directo</button>' +
+    '<button type="button" id="load-day" data-i18n>↑ Importar arquivo .xz</button> ' +
+    '<button type="button" id="back-live" data-i18n hidden>Voltar ao directo</button>' +
     '<input type="file" id="day-file" accept=".xz,application/x-xz" hidden>';
   form.before(bar);
   form.elements.minutes.querySelector('option[value="43200"]')?.remove();
   const original = params;
   let archive = null;
+  function renderSource() {
+    $('source-mode').textContent = archive
+      ? t('Arquivo UTC') + ' · ' + archive.date
+      : t('Em directo · últimos 7 dias');
+  }
+  localize(bar);
+  renderSource();
+  document.addEventListener('fluxo-languagechange', renderSource);
   params = (page, charts) => {
     const p = original(page, charts);
     if (archive) p.set('archive', archive.id);
@@ -262,19 +270,19 @@ CONTROLS = r"""
       const result = await response.json();
       if (!response.ok) throw Error(result.error);
       archive = result;
-      $('source-mode').textContent = 'Arquivo UTC · ' + result.date;
+      renderSource();
       $('back-live').hidden = false;
       form.elements.minutes.value = '1440';
       apply();
     } catch (error) {
-      status(error.message, true);
+      status(requestError(error), true);
     } finally {
       $('load-day').disabled = false;
     }
   };
   $('back-live').onclick = () => {
     archive = null;
-    $('source-mode').textContent = 'Em directo · últimos 7 dias';
+    renderSource();
     $('back-live').hidden = true;
     form.elements.minutes.value = '60';
     apply();

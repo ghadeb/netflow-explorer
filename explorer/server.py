@@ -245,6 +245,8 @@ class Handler(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         if url.path == "/":
             return self.send(200, "text/html; charset=utf-8", (ROOT / "index.html").read_bytes())
+        if url.path == "/i18n.js":
+            return self.send(200, "application/javascript; charset=utf-8", (ROOT / "i18n.js").read_bytes())
         if url.path not in {"/api/view", "/api/export"}:
             return self.send_json(404, {"error": "Página inexistente."})
         if not QUERIES.acquire(blocking=False):

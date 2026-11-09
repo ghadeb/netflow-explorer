@@ -9,7 +9,7 @@
 header{border-bottom:1px solid var(--line);background:#0c1726}
 .wrap{width:min(1540px,100% - 40px);margin:auto}.mast{display:flex;align-items:center;justify-content:space-between;padding:15px 0}
 .brand{font-weight:800;letter-spacing:.06em}.brand b{color:var(--up);margin-right:7px}
-nav{display:flex;gap:18px}a{color:var(--muted);text-decoration:none}a:hover{color:var(--text)}
+nav{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:12px}a{color:var(--muted);text-decoration:none}a:hover{color:var(--text)}
 main{padding:28px 0 50px}h1{font-size:clamp(34px,5vw,58px);letter-spacing:-.055em;line-height:1;margin:0 0 9px}
 h2,h3,p{margin:0}h2{font-size:24px}h3{font-size:16px}
 .sub,.muted,small{color:var(--muted)} .sub{margin-bottom:22px}
@@ -47,72 +47,116 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
 
 <header><div class="wrap mast">
   <div class="brand"><b>◈</b> FLUXO EXPLORER</div>
-  <nav><a href="#patterns">Padrões</a><a href="#flows">Fluxos</a></nav>
+  <nav>
+    <a href="#patterns" data-i18n>Padrões</a><a href="#flows" data-i18n>Fluxos</a>
+    <select id="language" aria-label="Idioma" data-i18n-aria-label="Idioma">
+      <option value="pt" lang="pt">Português</option>
+      <option value="en" lang="en">English</option>
+    </select>
+  </nav>
 </div></header>
 <main class="wrap">
-  <h1>Explorador de tráfego</h1>
-  <p class="sub">NetFlow v9 · IPv4 · Hora UTC</p>
+  <h1 data-i18n>Explorador de tráfego</h1>
+  <p class="sub" data-i18n>NetFlow v9 · IPv4 · Hora UTC</p>
 
   <form id="filters">
-    <label class="search">Pesquisar
-      <input name="q" type="search" maxlength="160" placeholder="IP, porto, serviço, protocolo ou AS…" autocomplete="off">
+    <label class="search"><span data-i18n>Pesquisar</span>
+      <input name="q" type="search" maxlength="160" placeholder="IP, porto, serviço, protocolo ou AS…" data-i18n-placeholder="IP, porto, serviço, protocolo ou AS…" autocomplete="off">
     </label>
-    <label>Período
-      <select name="minutes"><option value="15">15 min</option><option value="60" selected>1 hora</option><option value="360">6 horas</option><option value="1440">24 horas</option><option value="10080">7 dias</option><option value="43200">30 dias</option></select>
+    <label><span data-i18n>Período</span>
+      <select name="minutes"><option value="15">15 min</option><option value="60" selected data-i18n>1 hora</option><option value="360" data-i18n>6 horas</option><option value="1440" data-i18n>24 horas</option><option value="10080" data-i18n>7 dias</option><option value="43200" data-i18n>30 dias</option></select>
     </label>
-    <label>Router <select name="router" id="routers"><option value="">Todos</option></select></label>
-    <label>Sentido <select name="direction"><option value="">Ambos</option><option value="up">Enviado</option><option value="down">Recebido</option></select></label>
-    <label>Agrupar por
-      <select name="group"><option value="flow">Fluxos individuais</option><option value="src">IP de origem</option><option value="dst">IP de destino</option><option value="pair">Origem → destino</option><option value="srcnet">Rede de origem</option><option value="dstnet">Rede de destino</option><option value="port">Porto de destino</option><option value="asn">ASN de destino</option></select>
+    <label>Router <select name="router" id="routers"><option value="" data-i18n>Todos</option></select></label>
+    <label><span data-i18n>Sentido</span> <select name="direction"><option value="" data-i18n>Ambos</option><option value="up" data-i18n>Enviado</option><option value="down" data-i18n>Recebido</option></select></label>
+    <label><span data-i18n>Agrupar por</span>
+      <select name="group"><option value="flow" data-i18n>Fluxos individuais</option><option value="src" data-i18n>IP de origem</option><option value="dst" data-i18n>IP de destino</option><option value="pair" data-i18n>Origem → destino</option><option value="srcnet" data-i18n>Rede de origem</option><option value="dstnet" data-i18n>Rede de destino</option><option value="port" data-i18n>Porto de destino</option><option value="asn" data-i18n>ASN de destino</option></select>
     </label>
-    <label id="prefix" hidden>Prefixo <input name="prefix" type="number" min="0" max="32" value="24"></label>
-    <button class="primary">Aplicar</button>
-    <button type="button" id="clear">Limpar</button>
+    <label id="prefix" hidden><span data-i18n>Prefixo</span> <input name="prefix" type="number" min="0" max="32" value="24"></label>
+    <button class="primary" data-i18n>Aplicar</button>
+    <button type="button" id="clear" data-i18n>Limpar</button>
   </form>
   <div id="status" role="status"></div>
 
   <div class="metrics" id="metrics"></div>
   <section class="grid" id="patterns">
-    <article class="card wide"><div class="card-head"><h3>Volume ao longo do tempo</h3><div class="legend"><span class="up">● Enviado</span><span class="down">● Recebido</span></div></div><div id="timeline" class="chart"></div></article>
-    <article class="card"><div class="card-head"><h3>Protocolos</h3></div><div id="proto"></div></article>
-    <article class="card"><div class="card-head"><h3>Top origens</h3></div><div id="src" class="rank"></div></article>
-    <article class="card"><div class="card-head"><h3>Top destinos</h3></div><div id="dst" class="rank"></div></article>
-    <article class="card"><div class="card-head"><h3>Portos e serviços de destino</h3></div><div id="port" class="rank"></div></article>
-    <article class="card wide"><div class="card-head"><h3>Conversas · origem → destino</h3></div><div id="pair" class="rank"></div></article>
-    <article class="card"><div class="card-head"><h3>ASNs de destino exportados</h3></div><div id="asn" class="rank"></div></article>
-    <article class="card full"><div class="card-head"><h3>Intensidade por dia e hora</h3><small>UTC · escolhe 7 dias para comparar a semana</small></div><div class="heat-scroll"><div id="heat" class="heat"></div></div></article>
+    <article class="card wide"><div class="card-head"><h3 data-i18n>Volume ao longo do tempo</h3><div class="legend"><span class="up" data-i18n>● Enviado</span><span class="down" data-i18n>● Recebido</span></div></div><div id="timeline" class="chart"></div></article>
+    <article class="card"><div class="card-head"><h3 data-i18n>Protocolos</h3></div><div id="proto"></div></article>
+    <article class="card"><div class="card-head"><h3 data-i18n>Top origens</h3></div><div id="src" class="rank"></div></article>
+    <article class="card"><div class="card-head"><h3 data-i18n>Top destinos</h3></div><div id="dst" class="rank"></div></article>
+    <article class="card"><div class="card-head"><h3 data-i18n>Portos e serviços de destino</h3></div><div id="port" class="rank"></div></article>
+    <article class="card wide"><div class="card-head"><h3 data-i18n>Conversas · origem → destino</h3></div><div id="pair" class="rank"></div></article>
+    <article class="card"><div class="card-head"><h3 data-i18n>ASNs de destino exportados</h3></div><div id="asn" class="rank"></div></article>
+    <article class="card full"><div class="card-head"><h3 data-i18n>Intensidade por dia e hora</h3><small data-i18n>UTC · escolhe 7 dias para comparar a semana</small></div><div class="heat-scroll"><div id="heat" class="heat"></div></div></article>
   </section>
 
   <section id="flows" class="card">
     <div class="table-head">
-      <div><h2 id="table-title">Fluxos individuais</h2><small id="count"></small></div>
+      <div><h2 id="table-title" data-i18n>Fluxos individuais</h2><small id="count"></small></div>
       <div>
-        <select id="sort" aria-label="Ordenar"><option value="total">Maior consumo</option><option value="up">Mais enviado</option><option value="down">Mais recebido</option><option value="packets">Mais pacotes</option><option value="recent">Mais recentes</option></select>
-        <button type="button" id="export">↓ Exportar CSV</button>
+        <select id="sort" aria-label="Ordenar" data-i18n-aria-label="Ordenar"><option value="total" data-i18n>Maior consumo</option><option value="up" data-i18n>Mais enviado</option><option value="down" data-i18n>Mais recebido</option><option value="packets" data-i18n>Mais pacotes</option><option value="recent" data-i18n>Mais recentes</option></select>
+        <button type="button" id="export" data-i18n>↓ Exportar CSV</button>
       </div>
     </div>
     <div class="table-scroll"><table><thead id="head"></thead><tbody id="body"></tbody></table></div>
     <div class="pagination">
-      <div><button type="button" id="prev">← Anterior</button> <button type="button" id="next">Seguinte →</button></div>
+      <div><button type="button" id="prev" data-i18n>← Anterior</button> <button type="button" id="next" data-i18n>Seguinte →</button></div>
       <small id="page"></small>
-      <select id="size" aria-label="Linhas por página"><option>25</option><option>50</option><option>100</option></select>
+      <select id="size" aria-label="Linhas por página" data-i18n-aria-label="Linhas por página"><option>25</option><option>50</option><option>100</option></select>
     </div>
-    <p class="hint">Os sentidos referem-se à LAN monitorizada. Se os dois routers observam o mesmo tráfego, selecciona um router para evitar somar as duas observações.</p>
+    <p class="hint" data-i18n>Os sentidos referem-se à LAN monitorizada. Se os dois routers observam o mesmo tráfego, selecciona um router para evitar somar as duas observações.</p>
   </section>
 </main>
 
+<script src="/i18n.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const form = $('filters');
 const names = new Map();
-const fmt = new Intl.NumberFormat('pt-PT', {maximumFractionDigits: 1});
+let savedLanguage;
+try { savedLanguage = localStorage.getItem('fluxo-language'); } catch {}
+let language = FluxoI18n.chooseLanguage(savedLanguage, navigator.languages);
+let fmt;
+const t = message => FluxoI18n.translate(message, language);
 const colors = ['#38d8b0','#8da8ff','#f9bd72','#f58aa6','#92d5f6','#b1a2e8','#a9d984','#f39c6b'];
-const empty = '<p class="empty">Sem dados para estes filtros.</p>';
+const empty = () => '<p class="empty">' + t('Sem dados para estes filtros.') + '</p>';
 const esc = value => String(value ?? '—').replace(/[&<>"']/g, ch => ({
   '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
 })[ch]);
 
-let filters, anchor, current, request;
+let filters, anchor, current, chartData, request, statusMessage = '';
+
+function localize(root = document) {
+  for (const node of root.querySelectorAll('[data-i18n]')) {
+    node.dataset.i18n ||= node.textContent;
+    node.textContent = t(node.dataset.i18n);
+  }
+  for (const attr of ['aria-label', 'placeholder']) {
+    const key = 'data-i18n-' + attr;
+    for (const node of root.querySelectorAll('[' + key + ']')) {
+      node.setAttribute(attr, t(node.getAttribute(key)));
+    }
+  }
+}
+
+function setLanguage(value) {
+  language = value;
+  const locale = language === 'en' ? 'en-GB' : 'pt-PT';
+  document.documentElement.lang = locale;
+  fmt = new Intl.NumberFormat(locale, {maximumFractionDigits: 1});
+  $('language').value = language;
+  localize();
+  $('routers').options[0].textContent = t('Todos');
+  if (chartData) draw(chartData);
+  if (current) table(current);
+  renderStatus();
+  document.dispatchEvent(new Event('fluxo-languagechange'));
+}
+
+$('language').onchange = event => {
+  const value = event.target.value;
+  try { localStorage.setItem('fluxo-language', value); } catch {}
+  setLanguage(value);
+};
 function volume(value) {
   let n = Number(value || 0), i = 0;
   const units = ['B','kB','MB','GB','TB','PB'];
@@ -121,9 +165,16 @@ function volume(value) {
 }
 function clock(seconds) { return new Date(seconds * 1000).toISOString().slice(11,16); }
 function stamp(seconds) { return new Date(seconds * 1000).toISOString().slice(0,19).replace('T',' '); }
+function renderStatus() {
+  $('status').textContent = typeof statusMessage === 'function' ? statusMessage() : t(statusMessage);
+}
 function status(message, error = false) {
-  $('status').textContent = message;
+  statusMessage = message;
+  renderStatus();
   $('status').className = error ? 'error' : '';
+}
+function requestError(error) {
+  return error instanceof TypeError ? 'Não foi possível ligar ao servidor.' : error.message;
 }
 function params(page, charts) {
   return new URLSearchParams({...filters, ...anchor, page, charts: charts ? '1' : '0',
@@ -142,13 +193,16 @@ async function load(page = 1, charts = true) {
     anchor = {end:data.end, ceiling:data.ceiling};
     current = data;
     const selected = filters.router;
-    $('routers').replaceChildren(new Option('Todos',''), ...data.routers.map(ip => new Option(ip,ip)));
+    $('routers').replaceChildren(new Option(t('Todos'),''), ...data.routers.map(ip => new Option(ip,ip)));
     $('routers').value = selected;
-    if (charts) draw(data);
+    if (charts) {
+      chartData = data;
+      draw(data);
+    }
     table(data);
-    status('Consulta até ' + stamp(data.end) + ' UTC');
+    status(() => t('Consulta até') + ' ' + stamp(data.end) + ' UTC');
   } catch (error) {
-    if (!controller.signal.aborted) status(error.message, true);
+    if (!controller.signal.aborted) status(requestError(error), true);
   }
 }
 function apply() {
@@ -164,59 +218,59 @@ function apply() {
 function barList(rows, key) {
   const max = Math.max(1, ...rows.map(row => row.total));
   return rows.map(row => {
-    const label = row.key + (row.service ? ' · ' + row.service : '');
+    const label = t(row.key) + (row.service ? ' · ' + row.service : '');
     return '<button type="button" data-query="' + esc(key + ':' + row.key) + '" title="' + esc(label) +
       '"><i style="width:' + (100 * row.total / max) + '%"></i><span>' + esc(label) +
       '</span><b>' + volume(row.total) + '</b></button>';
   }).join('');
 }
 function draw(data) {
-  const t = data.totals;
+  const totals = data.totals;
   $('metrics').innerHTML = [
-    ['Volume total',volume(t.total),''],['Enviado',volume(t.up),'up'],
-    ['Recebido',volume(t.down),'down'],['Registos',fmt.format(t.flows),'']
+    [t('Volume total'),volume(totals.total),''],[t('Enviado'),volume(totals.up),'up'],
+    [t('Recebido'),volume(totals.down),'down'],[t('Registos'),fmt.format(totals.flows),'']
   ].map(([label,value,cls]) => `<div class="metric"><small>${label}</small><b class="${cls}">${value}</b></div>`).join('');
 
   const series = data.series;
   const peak = Math.max(1, ...series.flatMap(row => [row.up,row.down]));
   const points = key => series.map((row,i) =>
     `${i * 960 / Math.max(1,series.length-1)},${190 - 175 * row[key] / peak}`).join(' ');
-  $('timeline').innerHTML = t.flows ? `
-    <div class="scale"><span>${volume(peak)} por intervalo</span><span>UTC</span></div>
-    <svg viewBox="0 0 960 190" preserveAspectRatio="none" role="img" aria-label="Volume enviado e recebido por intervalo">
+  $('timeline').innerHTML = totals.flows ? `
+    <div class="scale"><span>${volume(peak)} ${t('por intervalo')}</span><span>UTC</span></div>
+    <svg viewBox="0 0 960 190" preserveAspectRatio="none" role="img" aria-label="${t('Volume enviado e recebido por intervalo')}">
       ${[15,59,103,147,190].map(y => `<path d="M0 ${y}H960" stroke="#23354b" fill="none"/>`).join('')}
       ${[['down','#8da8ff'],['up','#38d8b0']].map(([key,color]) => `
         <polygon points="0,190 ${points(key)} 960,190" fill="${color}" opacity=".13"/>
         <polyline points="${points(key)}" fill="none" stroke="${color}" stroke-width="2.2" vector-effect="non-scaling-stroke"/>`).join('')}
     </svg>
     <div class="scale">${[0,.25,.5,.75,1].map(x => `<span>${clock(series[Math.round(x*(series.length-1))].at)}</span>`).join('')}</div>
-    <div class="tip" id="point">Passa o cursor para ver o detalhe por intervalo.</div>` : empty;
+    <div class="tip" id="point">${t('Passa o cursor para ver o detalhe por intervalo.')}</div>` : empty();
   const plot = $('timeline').querySelector('svg');
   if (plot) plot.onpointermove = event => {
     const rect = plot.getBoundingClientRect();
     const i = Math.max(0, Math.min(series.length - 1,
       Math.round((event.clientX - rect.left) / rect.width * (series.length - 1))));
     const row = series[i];
-    $('point').textContent = `${stamp(row.at)} UTC · Enviado ${volume(row.up)} · Recebido ${volume(row.down)}`;
+    $('point').textContent = `${stamp(row.at)} UTC · ${t('Enviado')} ${volume(row.up)} · ${t('Recebido')} ${volume(row.down)}`;
   };
 
   for (const key of ['src','dst','port','pair','asn']) {
     const rows = data.charts[key];
     $(key).innerHTML = rows.length ? barList(rows,key) :
-      (key === 'asn' ? '<p class="empty">Sem ASN de destino exportado neste intervalo.</p>' : empty);
+      (key === 'asn' ? `<p class="empty">${t('Sem ASN de destino exportado neste intervalo.')}</p>` : empty());
   }
   let stop = 0;
   const segments = data.charts.proto.map((row,i) => {
     const from = stop;
-    stop += row.total / Math.max(1,t.total) * 100;
+    stop += row.total / Math.max(1,totals.total) * 100;
     return `${colors[i]} ${from}% ${stop}%`;
   });
-  $('proto').innerHTML = t.total > 0 ? `<div class="mix"><div class="ring" aria-hidden="true"
+  $('proto').innerHTML = totals.total > 0 ? `<div class="mix"><div class="ring" aria-hidden="true"
     style="background:conic-gradient(${segments.join(',')},#23354b ${Math.min(stop,100)}% 100%)"></div>
-    <div class="rank">${barList(data.charts.proto,'proto')}</div></div>` : empty;
+    <div class="rank">${barList(data.charts.proto,'proto')}</div></div>` : empty();
 
   const peakHeat = Math.max(1, ...Object.values(data.heat));
-  const days = ['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'];
+  const days = ['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'].map(t);
   $('heat').innerHTML = '<span></span>' +
     Array.from({length:24}, (_,hour) => `<span>${String(hour).padStart(2,'0')}</span>`).join('') +
     days.map((day,d) => `<span>${day}</span>` + Array.from({length:24},(_,hour) => {
@@ -228,32 +282,34 @@ function draw(data) {
 
 function endpoint(ip, port) {
   if (!ip) return '—';
-  const name = names.get(ip);
+  const name = names.get(ip) || (names.has(ip) ? t('Sem PTR') : '');
   const label = port > 0 ? `${ip}:${port}` : ip;
   return `<span class="endpoint">${esc(label)}<button class="ptr" type="button"
-    data-ptr="${esc(ip)}" aria-label="Resolver ${esc(ip)}">PTR</button>
+    data-ptr="${esc(ip)}" aria-label="${t('Resolver')} ${esc(ip)}">PTR</button>
     ${name ? `<small>${esc(name)}</small>` : ''}</span>`;
 }
 function table(data) {
   const individual = filters.group === 'flow';
-  $('table-title').textContent = individual ? 'Fluxos individuais' : 'Tráfego agregado';
-  $('count').textContent = fmt.format(data.matches) + (individual ? ' registos' : ' grupos');
+  $('table-title').textContent = t(individual ? 'Fluxos individuais' : 'Tráfego agregado');
+  const unit = individual ? (data.matches === 1 ? 'registo' : 'registos') :
+    (data.matches === 1 ? 'grupo' : 'grupos');
+  $('count').textContent = fmt.format(data.matches) + ' ' + t(unit);
   const titles = individual ?
     ['Recepção UTC','Router','Origem','Destino','Protocolo / serviço','ASN origem / destino','Enviado','Recebido','Total','Pacotes'] :
     ['Grupo','Registos','Enviado','Recebido','Total','Pacotes'];
-  $('head').innerHTML = '<tr>' + titles.map(title => `<th scope="col">${title}</th>`).join('') + '</tr>';
+  $('head').innerHTML = '<tr>' + titles.map(title => `<th scope="col">${t(title)}</th>`).join('') + '</tr>';
   $('body').innerHTML = data.rows.length ? data.rows.map(row => {
     const asn = n => n > 0 ? `AS${n}` : '—';
     const lead = individual ? `<td>${stamp(row.received)}</td><td>${esc(row.router)}</td>
       <td>${endpoint(row.src,row.sport)}</td><td>${endpoint(row.dst,row.dport)}</td>
-      <td>${esc(row.proto)}${row.dport > 0 ? ' / '+esc(row.dport) : ''}${row.service ? ' · '+esc(row.service) : ''}</td>
+      <td>${esc(t(row.proto))}${row.dport > 0 ? ' / '+esc(row.dport) : ''}${row.service ? ' · '+esc(row.service) : ''}</td>
       <td>${esc(asn(row.sasn))} / ${esc(asn(row.dasn))}</td>` :
-      `<td>${esc(row.key)}${row.service ? ' · '+esc(row.service) : ''}</td><td>${fmt.format(row.flows)}</td>`;
+      `<td>${esc(t(row.key))}${row.service ? ' · '+esc(row.service) : ''}</td><td>${fmt.format(row.flows)}</td>`;
     return `<tr>${lead}<td class="number up">${volume(row.up)}</td><td class="number down">${volume(row.down)}</td>
       <td class="number"><b>${volume(row.total)}</b></td><td class="number">${fmt.format(row.packets)}</td></tr>`;
-  }).join('') : `<tr><td colspan="${titles.length}">Sem resultados para os filtros seleccionados.</td></tr>`;
+  }).join('') : `<tr><td colspan="${titles.length}">${t('Sem resultados para os filtros seleccionados.')}</td></tr>`;
   const pages = Math.max(1, Math.ceil(data.matches / Number($('size').value)));
-  $('page').textContent = `Página ${data.page} de ${pages}`;
+  $('page').textContent = `${t('Página')} ${fmt.format(data.page)} ${t('de')} ${fmt.format(pages)}`;
   $('prev').disabled = data.page <= 1;
   $('next').disabled = data.page >= pages;
   $('export').disabled = !data.rows.length;
@@ -280,10 +336,10 @@ $('body').onclick = async event => {
     const response = await fetch('/api/ptr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip})});
     const data = await response.json();
     if (!response.ok) throw Error(data.error);
-    names.set(ip,data.name || 'Sem PTR');
+    names.set(ip,data.name);
     if (current) table(current);
   } catch (error) {
-    status(error.message,true);
+    status(requestError(error), true);
     button.disabled = false;
   }
 };
@@ -297,9 +353,10 @@ $('export').onclick = async () => {
     link.download = 'fluxo.csv';
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href),1000);
-  } catch (error) { status(error.message,true); }
+  } catch (error) { status(requestError(error), true); }
   finally { $('export').disabled = !current?.rows.length; }
 };
+setLanguage(language);
 apply();
 </script>
 </html>
