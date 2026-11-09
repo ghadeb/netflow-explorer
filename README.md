@@ -1,0 +1,229 @@
+# NetFlow Reporter
+
+Fluxo Explorer é o painel desta versão. Apresenta fluxos individuais, gráficos de padrões, pesquisa, paginação, agregações, ASN quando exportado, PTR a pedido e exportação CSV. O mesmo serviço `collector` recebe NetFlow e serve HTTPS na porta 8001.
+
+O GoFlow2 recebe NetFlow v9 IPv4 em UDP/2055 e UDP/2056. O serviço `collector` grava cada registo aceite em SQLite com o exportador, o sentido, os contadores e o JSON normalizado pelo GoFlow2. A base fica no volume persistente `fluxo_sqlite-data`. A retenção predefinida é de 30 dias a partir da recepção.
+
+## 1. Iniciar a recolha no servidor Linux
+
+Instala ou confirma Docker Engine e o plugin Docker Compose. Usa um servidor Linux AMD64 e entra na pasta `netflow-reporter`.
+
+```sh
+cp .env.example .env
+```
+
+Edita `.env`. Define `NETFLOW_UDP_BIND` com o IPv4 real do servidor que os routers alcançam e `FLOW_EXPORTERS` com os IPv4 de origem dos datagramas NetFlow. Define `NETFLOW_WEB_BIND` com o IPv4 privado usado para consultar o painel. Prepara o certificado em `tls-fluxo/` conforme a [configuração HTTPS](#4-configurar-o-https). Se algum router usa uma VRF para chegar à probe, confirma essa rota e a sintaxe de `destination <IP> vrf <VRF>` no CLI antes de aplicar.
+
+Autoriza UDP/2055 e UDP/2056 no caminho a partir dos dois IP dos exporters. Num servidor com Docker, verifica a filtragem efectiva do tráfego publicado pelo Docker. Usa um caminho privado sem NAT entre routers e colector quando precisares de os distinguir pelo IP de origem.
+
+```sh
+docker compose config -q
+docker compose up -d --build collector
+docker compose ps
+docker compose logs --tail=30 collector
+```
+
+O painel e a API são servidos pelo colector em HTTPS. O endereço é `https://<NETFLOW_WEB_BIND>:8001`.
+
+## 2. Configurar os routers
+
+Substitui `<IP-PROBE>` pelo mesmo IPv4 de `NETFLOW_UDP_BIND`, `<IF-SOURCE>` pela interface de origem já existente e `<IF-LAN>` pela interface L3 virada aos clientes. Faz primeiro num router e valida antes de repetir no segundo.
+
+```ios
+show version
+show ip route <IP-PROBE>
+show running-config interface <IF-LAN>
+show flow monitor
+show flow exporter
+show platform hardware qfp active datapath utilization
+```
+
+Para os monitores `TOP-IPV4` e `TOP-IPV4-DOWN` já aplicados na LAN, acrescenta apenas os exporters e as associações abaixo. Confirma os nomes e que os sentidos correspondem. Os exporters de entrada e saída usam portas diferentes para a probe identificar o sentido. Se a imagem não aceitar acrescentar um exporter a um monitor activo, revê o âmbito de todas as interfaces associadas antes de desassociar qualquer monitor existente.
+
+```ios
+configure terminal
+ flow exporter FLUXO-UP
+  destination <IP-PROBE>
+  source <IF-SOURCE>
+  transport udp 2055
+  export-protocol netflow-v9
+  template data timeout 60
+ exit
+ flow exporter FLUXO-DOWN
+  destination <IP-PROBE>
+  source <IF-SOURCE>
+  transport udp 2056
+  export-protocol netflow-v9
+  template data timeout 60
+ exit
+ flow monitor TOP-IPV4
+  exporter FLUXO-UP
+ exit
+ flow monitor TOP-IPV4-DOWN
+  exporter FLUXO-DOWN
+ end
+```
+
+Se os monitores ainda não existem, configura os dois exporters primeiro. Depois usa o bloco abaixo em vez das duas associações simples. O timeout activo de 60 segundos ajuda a obter dados de fluxos que continuam activos durante o teste.
+
+```ios
+configure terminal
+ flow monitor TOP-IPV4
+  record netflow ipv4 original-input
+  exporter FLUXO-UP
+  cache timeout active 60
+ exit
+ flow monitor TOP-IPV4-DOWN
+  record netflow ipv4 original-output
+  exporter FLUXO-DOWN
+  cache timeout active 60
+ exit
+ interface <IF-LAN>
+  ip flow monitor TOP-IPV4 input
+  ip flow monitor TOP-IPV4-DOWN output
+ end
+```
+
+Se só existir um dos monitores, acrescenta o exporter ao monitor existente e usa o bloco de criação apenas para o sentido em falta. Para um monitor existente com timeout maior, o primeiro registo pode chegar quando o fluxo ficar inactivo. Gera tráfego IPv4 de teste de curta duração num cliente atrás da LAN e aguarda a expiração.
+
+```ios
+show flow interface <IF-LAN>
+show flow exporter FLUXO-UP statistics
+show flow exporter FLUXO-DOWN statistics
+show flow monitor TOP-IPV4
+show flow monitor TOP-IPV4-DOWN
+show platform hardware qfp active datapath utilization
+```
+
+Confirma que os contadores de envio sobem. No servidor, se a base continuar vazia, verifica primeiro se chegam datagramas e se o IP de origem coincide com `FLOW_EXPORTERS`. A recepção de pacotes por si só não prova a descodificação dos templates nem a gravação em SQLite.
+
+```sh
+sudo tcpdump -ni <IF-SERVIDOR> -c 20 'udp dst port 2055 or udp dst port 2056'
+docker compose logs --tail=100 collector
+```
+
+Documentação Cisco para [exportação NetFlow v9](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/configuration/xe-16/fnf-xe-16-book/fnf-v9-export.html), [IOS XE 16.9](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/configuration/xe-16-9/fnf-xe-16-9-book/fnf-fnetflow.html) e [ASR1000 IOS XE 3S](https://www.cisco.com/c/ja_jp/td/docs/rt/wanaggregationinternetedgert/asr1000aggregationservsrt/cg/010/fnf-xe-3s-asr1000-book-1.pdf).
+
+### Reversão da exportação
+
+Para monitores que já existiam, remove apenas as associações adicionadas e depois os exporters. Se também criaste os monitores para este teste, podes desassociá-los da interface e removê-los. Confirma com `show flow interface <IF-LAN>`.
+
+```ios
+configure terminal
+ flow monitor TOP-IPV4
+  no exporter FLUXO-UP
+ exit
+ flow monitor TOP-IPV4-DOWN
+  no exporter FLUXO-DOWN
+ exit
+ no flow exporter FLUXO-UP
+ no flow exporter FLUXO-DOWN
+end
+```
+
+## 3. Provar a gravação e extrair a evidência
+
+A consulta seguinte mostra os últimos 15 minutos. Espera linhas `up` e `down` para cada router onde circulou tráfego nos dois sentidos.
+
+```sh
+docker compose exec -T collector python - <<'PY'
+import sqlite3
+db = sqlite3.connect("file:/data/flows.sqlite3?mode=ro", uri=True)
+for row in db.execute("""
+    SELECT router, direction, count(*), sum(bytes),
+           datetime(min(received), 'unixepoch'), datetime(max(received), 'unixepoch')
+    FROM records WHERE received >= unixepoch('now', '-15 minutes')
+    GROUP BY router, direction ORDER BY router, direction
+"""):
+    print(*row, sep="\t")
+PY
+```
+
+Colunas por ordem — exportador, sentido, registos, bytes, primeira e última recepção em UTC. Guarda a saída com a hora, a identificação do router, a interface observada e os contadores Cisco para documentar o ponto de captura.
+
+Para guardar uma cópia SQLite consistente enquanto a ingestão continua, usa a API de backup do SQLite. Reserva espaço para a cópia e protege o ficheiro porque contém metadados de tráfego. Confirma que o comando termina com sucesso antes de calcular o hash.
+
+```sh
+umask 077
+snapshot="fluxo-$(date -u +%Y%m%dT%H%M%SZ).sqlite3"
+docker compose exec -T collector python - > "$snapshot" <<'PY'
+from pathlib import Path
+import shutil
+import sqlite3
+import sys
+import tempfile
+
+with tempfile.TemporaryDirectory() as directory:
+    path = Path(directory) / "snapshot.sqlite3"
+    source = sqlite3.connect("file:/data/flows.sqlite3?mode=ro", uri=True)
+    target = sqlite3.connect(path)
+    source.backup(target)
+    target.close()
+    source.close()
+    with path.open("rb") as stream:
+        shutil.copyfileobj(stream, sys.stdout.buffer)
+PY
+sha256sum "$snapshot" > "$snapshot.sha256"
+```
+
+## 4. Configurar o HTTPS
+
+Coloca o certificado PEM em `tls-fluxo/cert.pem` e a chave em `tls-fluxo/key.pem`.
+O certificado autoassinado deve incluir no SAN o IP privado do painel e `127.0.0.1`
+para a verificação de saúde do serviço. O contentor usa UID e GID 10001.
+
+Para gerar um certificado autoassinado de teste, substitui o IP de exemplo e executa no servidor:
+
+```sh
+ip=192.0.2.20
+mkdir -p tls-fluxo
+(
+  umask 077
+  openssl req -x509 -newkey rsa:3072 -nodes -sha256 -days 365 \
+    -keyout tls-fluxo/key.pem -out tls-fluxo/cert.pem \
+    -subj "/CN=$ip" \
+    -addext "subjectAltName=IP:$ip,IP:127.0.0.1" \
+    -addext 'basicConstraints=critical,CA:FALSE' \
+    -addext 'extendedKeyUsage=serverAuth'
+)
+sudo chgrp 10001 tls-fluxo tls-fluxo/key.pem
+chmod 750 tls-fluxo
+chmod 640 tls-fluxo/key.pem
+chmod 644 tls-fluxo/cert.pem
+```
+
+Usa `tls-fluxo/cert.pem` como âncora de confiança para este certificado.
+O acesso directo destina-se à rede privada e a configuração base usa TLS sem login.
+
+```sh
+curl --cacert tls-fluxo/cert.pem "https://${ip}:8001/healthz"
+```
+
+## 5. Perfil de arquivo diário
+
+O [perfil de arquivo](compose.archives.yaml) inclui a proposta de sete dias de consulta
+em directo, exportação por dia UTC em `sqlite3.xz` e importação pelo painel. Esta
+proposta está preservada no repositório para validação no servidor.
+
+O arquivo usa um volume Docker existente, configurado por `FLOW_ARCHIVE_VOLUME`,
+com acesso de escrita para UID/GID 10001. Para permitir expiração, o volume deve
+estar num sistema de ficheiros separado do SQLite activo. A rotina verifica o
+arquivo e compara as linhas antes de expirar dados. O perfil base continua a usar
+o valor `RETENTION_DAYS` configurado.
+
+A configuração do perfil pode ser validada em separado:
+
+```sh
+docker compose -f compose.yaml -f compose.archives.yaml config -q
+```
+
+## Capacidade e retenção
+
+SQLite usa WAL, um escritor e agregados por minuto. A expiração corre a cada minuto e reutiliza espaço na base. O tamanho depende dos registos por segundo e da cardinalidade de IPs e portos. Após o primeiro período representativo, mede a variação de `du -h /data` no contentor e estima a capacidade para 30 dias, incluindo margem para o WAL e para backups. Uma janela de 30 dias com detalhe por porto pode exceder o tempo de consulta em instalações de grande volume. Os fluxos continuam disponíveis na base enquanto estiverem dentro da retenção.
+
+```sh
+docker compose exec collector du -h /data
+docker compose logs --tail=100 collector
+```
+
+A ingestão guarda os registos IPv4 v9 descodificados dos exporters autorizados. UDP pode perder datagramas e a sonda precisa de receber os templates para descodificar os registos. Na fase inicial, compara os contadores Cisco, os logs da probe e a consulta SQLite. Para parar os serviços e conservar o volume, usa `docker compose stop`. [GoFlow2](https://github.com/netsampler/goflow2/tree/v2.2.7)

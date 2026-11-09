@@ -1,0 +1,16 @@
+.env
+auth.caddy
+**/__pycache__
+**/node_modules
+**/dist
+**/*.sqlite3*
+docs
+tests
+
+artifacts
+tls-fluxo
+fluxo-explorer.*
+compose.yaml.antes-*
+.compose.*
+
+.env.*

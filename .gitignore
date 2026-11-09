@@ -1,0 +1,16 @@
+.env
+auth.caddy
+__pycache__/
+*.sqlite3*
+web/node_modules/
+web/dist/
+
+# Local deployment files and generated artifacts
+artifacts/
+tls-fluxo/
+fluxo-explorer.*/
+compose.yaml.antes-*
+.compose.*
+
+.env.*
+!.env.example

@@ -1,0 +1,40 @@
+name: fluxo
+
+services:
+  collector:
+    image: fluxo-collector:latest
+    build: .
+    platform: linux/amd64
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      FLOW_EXPORTERS: ${FLOW_EXPORTERS:?Configura os IP de origem dos exporters}
+      RETENTION_DAYS: ${RETENTION_DAYS:-30}
+      PTR_DNS: ${PTR_DNS:-}
+    ports:
+      - "${NETFLOW_UDP_BIND:-127.0.0.1}:2055:2055/udp"
+      - "${NETFLOW_UDP_BIND:-127.0.0.1}:2056:2056/udp"
+      - "${NETFLOW_WEB_BIND:-127.0.0.1}:8001:8000/tcp"
+    volumes:
+      - sqlite-data:/data
+      - type: bind
+        source: ./tls-fluxo
+        target: /tls
+        read_only: true
+        bind:
+          create_host_path: false
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import ssl; from urllib.request import urlopen; urlopen('https://127.0.0.1:8000/healthz', context=ssl.create_default_context(cafile='/tls/cert.pem'), timeout=2).close()"]
+      interval: 20s
+      timeout: 4s
+      retries: 3
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  sqlite-data:

@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="pt-PT">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fluxo Explorer</title>
+<style>
+:root{color-scheme:dark;--bg:#09111d;--panel:#101d2e;--line:#23354b;--text:#edf4fc;--muted:#9aacc1;--up:#38d8b0;--down:#8da8ff;--accent:#f9bd72}
+*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,sans-serif}
+header{border-bottom:1px solid var(--line);background:#0c1726}
+.wrap{width:min(1540px,100% - 40px);margin:auto}.mast{display:flex;align-items:center;justify-content:space-between;padding:15px 0}
+.brand{font-weight:800;letter-spacing:.06em}.brand b{color:var(--up);margin-right:7px}
+nav{display:flex;gap:18px}a{color:var(--muted);text-decoration:none}a:hover{color:var(--text)}
+main{padding:28px 0 50px}h1{font-size:clamp(34px,5vw,58px);letter-spacing:-.055em;line-height:1;margin:0 0 9px}
+h2,h3,p{margin:0}h2{font-size:24px}h3{font-size:16px}
+.sub,.muted,small{color:var(--muted)} .sub{margin-bottom:22px}
+form,.card,.metric{background:var(--panel);border:1px solid var(--line);border-radius:12px}
+form{display:flex;flex-wrap:wrap;align-items:end;gap:10px;padding:13px}
+label{display:grid;gap:4px;font-size:12px;color:var(--muted)}label.search{flex:1 1 230px}
+input,select,button{font:inherit;color:var(--text);border:1px solid #36506c;background:#0b1726;border-radius:7px;padding:8px 10px}
+input,select{height:38px}input[type=number]{width:72px}button{cursor:pointer;font-weight:650}
+button.primary{background:var(--up);border-color:var(--up);color:#05221c}button:hover:not(:disabled){filter:brightness(1.15)}
+button:disabled{opacity:.45;cursor:default}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+[hidden]{display:none!important}#status{min-height:32px;padding:7px 1px;color:var(--muted);font-size:13px}
+#status.error{color:#ffb9a6}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+.metric{padding:12px 16px}.metric b{display:block;font-size:clamp(20px,2.6vw,34px);letter-spacing:-.04em;line-height:1.2;margin-top:3px}
+.up{color:var(--up)}.down{color:var(--down)}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.card{padding:15px;min-width:0}.wide{grid-column:span 2}.full{grid-column:1/-1}
+.card-head,.table-head,.pagination{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.card-head{margin-bottom:12px}.legend{display:flex;gap:12px;font-size:12px;flex-wrap:wrap}
+.chart{position:relative}.chart svg{display:block;width:100%;height:184px}.scale{display:flex;justify-content:space-between;color:var(--muted);font-size:11px}
+.tip{min-height:20px;color:var(--muted);font-size:12px;margin-top:5px}.rank{display:grid;gap:6px}
+.rank button{position:relative;overflow:hidden;display:flex;gap:8px;justify-content:space-between;text-align:left;width:100%;border:0;background:#0b1726;font-size:13px}
+.rank button span{position:relative;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rank i{position:absolute;inset:0 auto 0 0;background:#294967}
+.rank b{position:relative;white-space:nowrap}.mix{display:grid;grid-template-columns:86px 1fr;align-items:center;gap:12px}
+.ring{width:86px;aspect-ratio:1;border-radius:50%;display:grid;place-items:center}.ring::after{content:'';background:var(--panel);width:62%;aspect-ratio:1;border-radius:50%}
+.heat-scroll,.table-scroll{overflow:auto}.heat{display:grid;grid-template-columns:36px repeat(24,minmax(15px,1fr));gap:3px;min-width:465px;font-size:10px;color:var(--muted);align-items:center}
+.heat i{height:15px;border-radius:3px;background:#183049}.heat span{text-align:center}
+#flows{margin-top:14px}.table-head{flex-wrap:wrap;margin-bottom:10px}
+table{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums;font-size:13px}
+th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left}th{color:var(--muted);background:#0c1827}tbody tr:hover{background:#17283e}
+td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoint small{display:block;font-family:system-ui,sans-serif}
+.ptr{padding:2px 4px;font-size:10px;margin-left:5px;color:var(--accent)}.pagination{padding-top:12px;flex-wrap:wrap}
+.empty{color:var(--muted);padding:12px 0}.hint{color:var(--muted);font-size:12px;margin-top:8px}
+@media(max-width:950px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.mix{grid-template-columns:70px 1fr}.ring{width:70px}}
+@media(max-width:640px){.wrap{width:calc(100% - 24px)}.grid,.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.card{grid-column:1/-1}.metric{padding:10px}.chart svg{height:145px}}
+</style>
+
+<header><div class="wrap mast">
+  <div class="brand"><b>◈</b> FLUXO EXPLORER</div>
+  <nav><a href="#patterns">Padrões</a><a href="#flows">Fluxos</a></nav>
+</div></header>
+<main class="wrap">
+  <h1>Explorador de tráfego</h1>
+  <p class="sub">NetFlow v9 · IPv4 · Hora UTC</p>
+
+  <form id="filters">
+    <label class="search">Pesquisar
+      <input name="q" type="search" maxlength="160" placeholder="IP, porto, serviço, protocolo ou AS…" autocomplete="off">
+    </label>
+    <label>Período
+      <select name="minutes"><option value="15">15 min</option><option value="60" selected>1 hora</option><option value="360">6 horas</option><option value="1440">24 horas</option><option value="10080">7 dias</option><option value="43200">30 dias</option></select>
+    </label>
+    <label>Router <select name="router" id="routers"><option value="">Todos</option></select></label>
+    <label>Sentido <select name="direction"><option value="">Ambos</option><option value="up">Enviado</option><option value="down">Recebido</option></select></label>
+    <label>Agrupar por
+      <select name="group"><option value="flow">Fluxos individuais</option><option value="src">IP de origem</option><option value="dst">IP de destino</option><option value="pair">Origem → destino</option><option value="srcnet">Rede de origem</option><option value="dstnet">Rede de destino</option><option value="port">Porto de destino</option><option value="asn">ASN de destino</option></select>
+    </label>
+    <label id="prefix" hidden>Prefixo <input name="prefix" type="number" min="0" max="32" value="24"></label>
+    <button class="primary">Aplicar</button>
+    <button type="button" id="clear">Limpar</button>
+  </form>
+  <div id="status" role="status"></div>
+
+  <div class="metrics" id="metrics"></div>
+  <section class="grid" id="patterns">
+    <article class="card wide"><div class="card-head"><h3>Volume ao longo do tempo</h3><div class="legend"><span class="up">● Enviado</span><span class="down">● Recebido</span></div></div><div id="timeline" class="chart"></div></article>
+    <article class="card"><div class="card-head"><h3>Protocolos</h3></div><div id="proto"></div></article>
+    <article class="card"><div class="card-head"><h3>Top origens</h3></div><div id="src" class="rank"></div></article>
+    <article class="card"><div class="card-head"><h3>Top destinos</h3></div><div id="dst" class="rank"></div></article>
+    <article class="card"><div class="card-head"><h3>Portos e serviços de destino</h3></div><div id="port" class="rank"></div></article>
+    <article class="card wide"><div class="card-head"><h3>Conversas · origem → destino</h3></div><div id="pair" class="rank"></div></article>
+    <article class="card"><div class="card-head"><h3>ASNs de destino exportados</h3></div><div id="asn" class="rank"></div></article>
+    <article class="card full"><div class="card-head"><h3>Intensidade por dia e hora</h3><small>UTC · escolhe 7 dias para comparar a semana</small></div><div class="heat-scroll"><div id="heat" class="heat"></div></div></article>
+  </section>
+
+  <section id="flows" class="card">
+    <div class="table-head">
+      <div><h2 id="table-title">Fluxos individuais</h2><small id="count"></small></div>
+      <div>
+        <select id="sort" aria-label="Ordenar"><option value="total">Maior consumo</option><option value="up">Mais enviado</option><option value="down">Mais recebido</option><option value="packets">Mais pacotes</option><option value="recent">Mais recentes</option></select>
+        <button type="button" id="export">↓ Exportar CSV</button>
+      </div>
+    </div>
+    <div class="table-scroll"><table><thead id="head"></thead><tbody id="body"></tbody></table></div>
+    <div class="pagination">
+      <div><button type="button" id="prev">← Anterior</button> <button type="button" id="next">Seguinte →</button></div>
+      <small id="page"></small>
+      <select id="size" aria-label="Linhas por página"><option>25</option><option>50</option><option>100</option></select>
+    </div>
+    <p class="hint">Os sentidos referem-se à LAN monitorizada. Se os dois routers observam o mesmo tráfego, selecciona um router para evitar somar as duas observações.</p>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const form = $('filters');
+const names = new Map();
+const fmt = new Intl.NumberFormat('pt-PT', {maximumFractionDigits: 1});
+const colors = ['#38d8b0','#8da8ff','#f9bd72','#f58aa6','#92d5f6','#b1a2e8','#a9d984','#f39c6b'];
+const empty = '<p class="empty">Sem dados para estes filtros.</p>';
+const esc = value => String(value ?? '—').replace(/[&<>"']/g, ch => ({
+  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+})[ch]);
+
+let filters, anchor, current, request;
+function volume(value) {
+  let n = Number(value || 0), i = 0;
+  const units = ['B','kB','MB','GB','TB','PB'];
+  while (n >= 1000 && i < units.length - 1) { n /= 1000; i++; }
+  return fmt.format(n) + ' ' + units[i];
+}
+function clock(seconds) { return new Date(seconds * 1000).toISOString().slice(11,16); }
+function stamp(seconds) { return new Date(seconds * 1000).toISOString().slice(0,19).replace('T',' '); }
+function status(message, error = false) {
+  $('status').textContent = message;
+  $('status').className = error ? 'error' : '';
+}
+function params(page, charts) {
+  return new URLSearchParams({...filters, ...anchor, page, charts: charts ? '1' : '0',
+    size: $('size').value, sort: $('sort').value});
+}
+async function load(page = 1, charts = true) {
+  request?.abort();
+  const controller = new AbortController();
+  request = controller;
+  status('A consultar o SQLite…');
+  try {
+    const response = await fetch('/api/view?' + params(page, charts), {signal:controller.signal});
+    const data = await response.json();
+    if (!response.ok) throw Error(data.error);
+    if (controller.signal.aborted) return;
+    anchor = {end:data.end, ceiling:data.ceiling};
+    current = data;
+    const selected = filters.router;
+    $('routers').replaceChildren(new Option('Todos',''), ...data.routers.map(ip => new Option(ip,ip)));
+    $('routers').value = selected;
+    if (charts) draw(data);
+    table(data);
+    status('Consulta até ' + stamp(data.end) + ' UTC');
+  } catch (error) {
+    if (!controller.signal.aborted) status(error.message, true);
+  }
+}
+function apply() {
+  filters = Object.fromEntries(new FormData(form));
+  anchor = {};
+  current = null;
+  $('export').disabled = true;
+  $('prev').disabled = $('next').disabled = true;
+  $('body').innerHTML = '';
+  load();
+}
+
+function barList(rows, key) {
+  const max = Math.max(1, ...rows.map(row => row.total));
+  return rows.map(row => {
+    const label = row.key + (row.service ? ' · ' + row.service : '');
+    return '<button type="button" data-query="' + esc(key + ':' + row.key) + '" title="' + esc(label) +
+      '"><i style="width:' + (100 * row.total / max) + '%"></i><span>' + esc(label) +
+      '</span><b>' + volume(row.total) + '</b></button>';
+  }).join('');
+}
+function draw(data) {
+  const t = data.totals;
+  $('metrics').innerHTML = [
+    ['Volume total',volume(t.total),''],['Enviado',volume(t.up),'up'],
+    ['Recebido',volume(t.down),'down'],['Registos',fmt.format(t.flows),'']
+  ].map(([label,value,cls]) => `<div class="metric"><small>${label}</small><b class="${cls}">${value}</b></div>`).join('');
+
+  const series = data.series;
+  const peak = Math.max(1, ...series.flatMap(row => [row.up,row.down]));
+  const points = key => series.map((row,i) =>
+    `${i * 960 / Math.max(1,series.length-1)},${190 - 175 * row[key] / peak}`).join(' ');
+  $('timeline').innerHTML = t.flows ? `
+    <div class="scale"><span>${volume(peak)} por intervalo</span><span>UTC</span></div>
+    <svg viewBox="0 0 960 190" preserveAspectRatio="none" role="img" aria-label="Volume enviado e recebido por intervalo">
+      ${[15,59,103,147,190].map(y => `<path d="M0 ${y}H960" stroke="#23354b" fill="none"/>`).join('')}
+      ${[['down','#8da8ff'],['up','#38d8b0']].map(([key,color]) => `
+        <polygon points="0,190 ${points(key)} 960,190" fill="${color}" opacity=".13"/>
+        <polyline points="${points(key)}" fill="none" stroke="${color}" stroke-width="2.2" vector-effect="non-scaling-stroke"/>`).join('')}
+    </svg>
+    <div class="scale">${[0,.25,.5,.75,1].map(x => `<span>${clock(series[Math.round(x*(series.length-1))].at)}</span>`).join('')}</div>
+    <div class="tip" id="point">Passa o cursor para ver o detalhe por intervalo.</div>` : empty;
+  const plot = $('timeline').querySelector('svg');
+  if (plot) plot.onpointermove = event => {
+    const rect = plot.getBoundingClientRect();
+    const i = Math.max(0, Math.min(series.length - 1,
+      Math.round((event.clientX - rect.left) / rect.width * (series.length - 1))));
+    const row = series[i];
+    $('point').textContent = `${stamp(row.at)} UTC · Enviado ${volume(row.up)} · Recebido ${volume(row.down)}`;
+  };
+
+  for (const key of ['src','dst','port','pair','asn']) {
+    const rows = data.charts[key];
+    $(key).innerHTML = rows.length ? barList(rows,key) :
+      (key === 'asn' ? '<p class="empty">Sem ASN de destino exportado neste intervalo.</p>' : empty);
+  }
+  let stop = 0;
+  const segments = data.charts.proto.map((row,i) => {
+    const from = stop;
+    stop += row.total / Math.max(1,t.total) * 100;
+    return `${colors[i]} ${from}% ${stop}%`;
+  });
+  $('proto').innerHTML = t.total > 0 ? `<div class="mix"><div class="ring" aria-hidden="true"
+    style="background:conic-gradient(${segments.join(',')},#23354b ${Math.min(stop,100)}% 100%)"></div>
+    <div class="rank">${barList(data.charts.proto,'proto')}</div></div>` : empty;
+
+  const peakHeat = Math.max(1, ...Object.values(data.heat));
+  const days = ['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'];
+  $('heat').innerHTML = '<span></span>' +
+    Array.from({length:24}, (_,hour) => `<span>${String(hour).padStart(2,'0')}</span>`).join('') +
+    days.map((day,d) => `<span>${day}</span>` + Array.from({length:24},(_,hour) => {
+      const n = data.heat[d*24+hour] || 0;
+      const color = n ? `rgba(56,216,176,${.16 + .84 * Math.sqrt(n/peakHeat)})` : '#183049';
+      return `<i style="background:${color}" title="${day} ${hour}:00 UTC · ${volume(n)}"></i>`;
+    }).join('')).join('');
+}
+
+function endpoint(ip, port) {
+  if (!ip) return '—';
+  const name = names.get(ip);
+  const label = port > 0 ? `${ip}:${port}` : ip;
+  return `<span class="endpoint">${esc(label)}<button class="ptr" type="button"
+    data-ptr="${esc(ip)}" aria-label="Resolver ${esc(ip)}">PTR</button>
+    ${name ? `<small>${esc(name)}</small>` : ''}</span>`;
+}
+function table(data) {
+  const individual = filters.group === 'flow';
+  $('table-title').textContent = individual ? 'Fluxos individuais' : 'Tráfego agregado';
+  $('count').textContent = fmt.format(data.matches) + (individual ? ' registos' : ' grupos');
+  const titles = individual ?
+    ['Recepção UTC','Router','Origem','Destino','Protocolo / serviço','ASN origem / destino','Enviado','Recebido','Total','Pacotes'] :
+    ['Grupo','Registos','Enviado','Recebido','Total','Pacotes'];
+  $('head').innerHTML = '<tr>' + titles.map(title => `<th scope="col">${title}</th>`).join('') + '</tr>';
+  $('body').innerHTML = data.rows.length ? data.rows.map(row => {
+    const asn = n => n > 0 ? `AS${n}` : '—';
+    const lead = individual ? `<td>${stamp(row.received)}</td><td>${esc(row.router)}</td>
+      <td>${endpoint(row.src,row.sport)}</td><td>${endpoint(row.dst,row.dport)}</td>
+      <td>${esc(row.proto)}${row.dport > 0 ? ' / '+esc(row.dport) : ''}${row.service ? ' · '+esc(row.service) : ''}</td>
+      <td>${esc(asn(row.sasn))} / ${esc(asn(row.dasn))}</td>` :
+      `<td>${esc(row.key)}${row.service ? ' · '+esc(row.service) : ''}</td><td>${fmt.format(row.flows)}</td>`;
+    return `<tr>${lead}<td class="number up">${volume(row.up)}</td><td class="number down">${volume(row.down)}</td>
+      <td class="number"><b>${volume(row.total)}</b></td><td class="number">${fmt.format(row.packets)}</td></tr>`;
+  }).join('') : `<tr><td colspan="${titles.length}">Sem resultados para os filtros seleccionados.</td></tr>`;
+  const pages = Math.max(1, Math.ceil(data.matches / Number($('size').value)));
+  $('page').textContent = `Página ${data.page} de ${pages}`;
+  $('prev').disabled = data.page <= 1;
+  $('next').disabled = data.page >= pages;
+  $('export').disabled = !data.rows.length;
+}
+
+form.onsubmit = event => { event.preventDefault(); apply(); };
+form.elements.group.onchange = () => {
+  $('prefix').hidden = !['srcnet','dstnet'].includes(form.elements.group.value);
+};
+$('clear').onclick = () => { form.reset(); $('prefix').hidden = true; apply(); };
+$('prev').onclick = () => load(current.page - 1, false);
+$('next').onclick = () => load(current.page + 1, false);
+$('sort').onchange = $('size').onchange = () => { if (current) load(1,false); };
+$('patterns').onclick = event => {
+  const button = event.target.closest('[data-query]');
+  if (button) { form.elements.q.value = button.dataset.query; apply(); }
+};
+$('body').onclick = async event => {
+  const button = event.target.closest('[data-ptr]');
+  if (!button || !current) return;
+  button.disabled = true;
+  const ip = button.dataset.ptr;
+  try {
+    const response = await fetch('/api/ptr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip})});
+    const data = await response.json();
+    if (!response.ok) throw Error(data.error);
+    names.set(ip,data.name || 'Sem PTR');
+    if (current) table(current);
+  } catch (error) {
+    status(error.message,true);
+    button.disabled = false;
+  }
+};
+$('export').onclick = async () => {
+  $('export').disabled = true;
+  try {
+    const response = await fetch('/api/export?' + params(1,false));
+    if (!response.ok) throw Error((await response.json()).error);
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(await response.blob());
+    link.download = 'fluxo.csv';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href),1000);
+  } catch (error) { status(error.message,true); }
+  finally { $('export').disabled = !current?.rows.length; }
+};
+apply();
+</script>
+</html>
