@@ -1,12 +1,15 @@
 import hashlib
+import json
 import lzma
 import os
+import re
 import shutil
 import signal
 import sqlite3
+import stat
 import sys
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import BoundedSemaphore
@@ -21,6 +24,10 @@ IMPORTS = ROOT / ".imports"
 LIVE_PATH = Path("/data/flows.sqlite3")
 DAY = 86400
 CHUNK = 1024 * 1024
+IMPORT_RESERVE = 2 * 1024 * CHUNK
+SPACE_CHECK = 64 * CHUNK
+ARCHIVE_NAME = re.compile(r"fluxo-([0-9]{4}-[0-9]{2}-[0-9]{2})\.sqlite3\.xz")
+IMPORT_TOKEN = re.compile(r"[0-9a-f]{32}")
 FIELDS = "received router direction client bytes packets flow".split()
 COLUMNS = ",".join(FIELDS)
 MATCH = " AND ".join(f"a.{field}=r.{field}" for field in FIELDS)
@@ -40,9 +47,11 @@ def digest(stream):
     return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def unpack(source, output, remaining, limit=None):
+def unpack(source, output, remaining, limit=None, checksum=None):
     decoder = lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=128 * CHUNK)
+    compressed = hashlib.sha256() if checksum is not None else None
     total = 0
+    next_check = SPACE_CHECK
     with output.open("wb") as target:
         while not decoder.eof:
             if decoder.needs_input:
@@ -50,15 +59,24 @@ def unpack(source, output, remaining, limit=None):
                 if not block:
                     raise ValueError("Arquivo XZ incompleto.")
                 remaining -= len(block)
+                if compressed is not None:
+                    compressed.update(block)
             else:
                 block = b""
             data = decoder.decompress(block, max_length=CHUNK)
+            if limit is not None and total >= next_check:
+                # Leave headroom if the collector and archive volume share a filesystem.
+                free = shutil.disk_usage(output.parent).free
+                limit = min(limit, total + free - IMPORT_RESERVE)
+                next_check = total + SPACE_CHECK
             total += len(data)
             if limit is not None and total > limit:
                 raise ValueError("O arquivo descomprimido excede o espaço disponível.")
             target.write(data)
         if remaining or decoder.unused_data:
             raise ValueError("O ficheiro deve conter um único arquivo XZ.")
+        if compressed is not None and compressed.hexdigest() != checksum:
+            raise ValueError("O SHA-256 do arquivo não corresponde.")
 
 
 def open_archive(path):
@@ -238,32 +256,101 @@ def worker():
         sleep(900)
 
 
+def archive_catalog():
+    items = []
+    for path in ROOT.iterdir():
+        match = ARCHIVE_NAME.fullmatch(path.name)
+        if not match:
+            continue
+        try:
+            day = date.fromisoformat(match[1])
+            metadata = path.stat(follow_symlinks=False)
+        except (ValueError, FileNotFoundError):
+            continue
+        if stat.S_ISREG(metadata.st_mode) and metadata.st_size > 0:
+            items.append({"date": day.isoformat(), "bytes": metadata.st_size})
+    return sorted(items, key=lambda item: item["date"], reverse=True)
+
+
+def open_regular(path):
+    source = os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb")
+    if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+        source.close()
+        raise ValueError("Arquivo inválido.")
+    return source
+
+
+def stage_import(source, length, expected_date=None, checksum=None):
+    budget = shutil.disk_usage(ROOT).free - IMPORT_RESERVE
+    if not 0 < length <= budget:
+        raise ValueError("Escolhe um arquivo XZ com espaço suficiente no disco.")
+    IMPORTS.mkdir(mode=0o700, exist_ok=True)
+    if not stat.S_ISDIR(IMPORTS.stat(follow_symlinks=False).st_mode):
+        raise ValueError("Directório de importação indisponível.")
+    token = uuid4().hex
+    target = IMPORTS / f"{token}.sqlite3"
+    with TemporaryDirectory(prefix=".upload-", dir=IMPORTS) as directory:
+        path = Path(directory) / "view.sqlite3"
+        unpack(source, path, length, budget, checksum)
+        day, count = validate(path)
+        iso_day = datetime.fromtimestamp(day, UTC).date().isoformat()
+        if expected_date is not None and iso_day != expected_date:
+            raise ValueError("A data do arquivo não corresponde ao ficheiro seleccionado.")
+        os.replace(path, target)
+
+    for old in IMPORTS.glob("*.sqlite3"):
+        if old != target and IMPORT_TOKEN.fullmatch(old.stem):
+            old.unlink(missing_ok=True)
+    return {"id": token, "date": iso_day, "rows": count}
+
+
+def open_saved_archive(day):
+    name = f"fluxo-{day}.sqlite3.xz"
+    if not ARCHIVE_NAME.fullmatch(name):
+        raise ValueError("Arquivo inválido.")
+    try:
+        date.fromisoformat(day)
+    except ValueError as exc:
+        raise ValueError("Arquivo inválido.") from exc
+
+    path = ROOT / name
+    checksum = None
+    try:
+        with open_regular(path.with_name(name + ".sha256")) as metadata:
+            expected, _, _ = metadata.read(128).partition(b" ")
+            if not re.fullmatch(rb"[0-9a-f]{64}", expected):
+                raise ValueError("O SHA-256 do arquivo não corresponde.")
+            checksum = expected.decode("ascii")
+    except FileNotFoundError:
+        pass
+    with open_regular(path) as source:
+        return stage_import(source, os.fstat(source.fileno()).st_size, day, checksum)
+
+
 def handler(base):
     class ArchiveHandler(base):
         def do_POST(self):
-            if self.path != "/api/import":
+            if self.path not in {"/api/import", "/api/archives/open"}:
                 return super().do_POST()
             if not UPLOAD.acquire(blocking=False):
                 return self.send_json(429, {"error": "Já está a decorrer uma importação."})
             try:
                 length = int(self.headers.get("Content-Length", 0))
-                budget = shutil.disk_usage(ROOT).free - 2 * 1024 * CHUNK
-                if (self.headers.get_content_type() != "application/x-xz"
-                        or not 0 < length <= budget):
-                    raise ValueError("Escolhe um arquivo XZ com espaço suficiente no disco.")
-                IMPORTS.mkdir(mode=0o700, exist_ok=True)
-                token = uuid4().hex
-                with TemporaryDirectory(prefix=".upload-", dir=IMPORTS) as directory:
-                    path = Path(directory) / "view.sqlite3"
-                    unpack(self.rfile, path, length, budget)
-                    day, count = validate(path)
-                    target = IMPORTS / f"{token}.sqlite3"
-                    os.replace(path, target)
-                for old in IMPORTS.glob("*.sqlite3"):
-                    if old != target:
-                        old.unlink(missing_ok=True)
-                date = datetime.fromtimestamp(day, UTC).date().isoformat()
-                return self.send_json(200, {"id": token, "date": date, "rows": count})
+                content_type = self.headers.get_content_type()
+                if self.path == "/api/archives/open":
+                    if content_type != "application/json" or not 0 < length <= 128:
+                        raise ValueError("Arquivo inválido.")
+                    body = json.loads(self.rfile.read(length))
+                    if not isinstance(body, dict) or not isinstance(body.get("date"), str):
+                        raise ValueError("Arquivo inválido.")
+                    result = open_saved_archive(body["date"])
+                else:
+                    if content_type != "application/x-xz":
+                        raise ValueError("Escolhe um arquivo XZ com espaço suficiente no disco.")
+                    result = stage_import(self.rfile, length)
+                return self.send_json(200, result)
+            except FileNotFoundError:
+                return self.send_json(404, {"error": "O arquivo já não está disponível."})
             except (ValueError, OSError, EOFError, lzma.LZMAError, sqlite3.Error) as exc:
                 return self.send_json(400, {"error": f"Importação recusada. {exc}"})
             finally:
@@ -271,6 +358,11 @@ def handler(base):
 
         def do_GET(self):
             url = urlsplit(self.path)
+            if url.path == "/api/archives":
+                try:
+                    return self.send_json(200, {"archives": archive_catalog()})
+                except OSError:
+                    return self.send_json(503, {"error": "Não foi possível listar os arquivos."})
             if url.path not in {"/api/view", "/api/export"}:
                 return super().do_GET()
 
@@ -282,7 +374,7 @@ def handler(base):
                     if int(args.get("minutes", 60)) > retention_days() * 1440:
                         raise ValueError("O período excede a retenção em directo.")
                     return super().do_GET()
-                if len(token) != 32 or any(ch not in "0123456789abcdef" for ch in token):
+                if not IMPORT_TOKEN.fullmatch(token):
                     raise ValueError("Arquivo inválido.")
                 path = IMPORTS / f"{token}.sqlite3"
                 if not path.is_file():

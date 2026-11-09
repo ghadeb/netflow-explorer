@@ -6,6 +6,8 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import Mock, patch
 from io import BytesIO, StringIO
+import hashlib
+import json
 import lzma
 import sys
 
@@ -102,6 +104,79 @@ class DailyArchiveTest(TestCase):
             code, result = request.send_json.call_args.args
             self.assertEqual(code, 200, result)
             self.assertEqual(result["rows"][0]["peer"], "198.51.100.1")
+
+    def make_saved(self, day):
+        raw = self.volume / "day.sqlite3"
+        archives.merge_day(raw, day)
+        payload = lzma.compress(raw.read_bytes(), preset=0)
+        raw.unlink()
+        file = self.file_for(day)
+        file.write_bytes(payload)
+        sha256 = hashlib.sha256(payload).hexdigest()
+        file.with_name(file.name + ".sha256").write_text(f"{sha256}  {file.name}\n")
+        return file
+
+    def test_catalog_lists_only_daily_files_newest_first(self):
+        older = self.file_for(TODAY - 2 * archives.DAY)
+        recent = self.file_for(TODAY - archives.DAY)
+        older.write_bytes(b"older")
+        recent.write_bytes(b"recent")
+        self.file_for(TODAY).symlink_to(recent)
+        self.file_for(TODAY + archives.DAY).mkdir()
+        (self.volume / "fluxo-2027-02-30.sqlite3.xz").write_bytes(b"invalid date")
+        (self.volume / "upload.sqlite3.xz").write_bytes(b"unrelated")
+        request = archives.handler(object)()
+        request.path = "/api/archives"
+        request.send_json = Mock()
+        request.do_GET()
+        code, result = request.send_json.call_args.args
+        self.assertEqual(code, 200)
+        self.assertEqual(result["archives"], [
+            {"date": datetime.fromtimestamp(day, UTC).date().isoformat(), "bytes": size}
+            for day, size in ((TODAY - archives.DAY, 6), (TODAY - 2 * archives.DAY, 5))
+        ])
+
+    def test_open_saved_archive_stages_separate_read_only_copy(self):
+        day = TODAY - archives.DAY
+        self.add_record(day)
+        self.add_record(TODAY)
+        file = self.make_saved(day)
+        original = file.read_bytes()
+        live_before = list(self.db.execute("SELECT * FROM records"))
+        request = archives.handler(object)()
+        request.path = "/api/archives/open"
+        request.send_json = Mock()
+
+        def select(selected):
+            body = json.dumps({"date": selected}).encode()
+            request.headers = Message()
+            request.headers["Content-Type"] = "application/json"
+            request.headers["Content-Length"] = str(len(body))
+            request.rfile = BytesIO(body)
+            request.do_POST()
+            return request.send_json.call_args.args
+
+        iso_day = datetime.fromtimestamp(day, UTC).date().isoformat()
+        imports = self.volume / ".imports"
+        with patch.object(archives, "IMPORTS", imports):
+            code, result = select(iso_day)
+            self.assertEqual(code, 200, result)
+            self.assertEqual(result["date"], iso_day)
+            copy = imports / (result["id"] + ".sqlite3")
+            with closing(archives.open_archive(copy)) as db:
+                self.assertEqual(db.execute("PRAGMA query_only").fetchone()[0], 1)
+                self.assertEqual(db.execute("SELECT count(*) FROM records").fetchone()[0], 1)
+            self.assertEqual(select("../live")[0], 400)
+            file.with_name(file.name + ".sha256").write_text("0" * 64 + "  " + file.name)
+            code, result = select(iso_day)
+            self.assertEqual(code, 400)
+            self.assertIn("SHA-256", result["error"])
+            self.assertEqual(list(imports.iterdir()), [copy])
+
+        self.assertEqual(file.read_bytes(), original)
+        self.assertEqual(list(self.db.execute("SELECT * FROM records")), live_before)
+        self.add_record(TODAY)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM records").fetchone()[0], 3)
 
     def test_failed_daily_export_preserves_sqlite_records(self):
         expired = TODAY - 31 * archives.DAY

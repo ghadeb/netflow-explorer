@@ -1,3 +1,27 @@
+function renderActivityPeak(data) {
+  if (!data.totals.total) {
+    $('activity-peak').innerHTML = empty();
+    return;
+  }
+  const bytes = row => row.up + row.down;
+  const peak = data.series.reduce((highest, row) => bytes(row) > bytes(highest) ? row : highest);
+  const total = bytes(peak);
+  const step = data.series[1] ? data.series[1].at - data.series[0].at : data.end - peak.at;
+  const start = stamp(peak.at);
+  const stop = stamp(Math.min(data.end, peak.at + step));
+  const range = start + ' → ' + (start.slice(0, 10) === stop.slice(0, 10) ? stop.slice(11) : stop);
+  const share = fmt.format(total * 100 / data.totals.total);
+  $('activity-peak').innerHTML = '<div class="activity-volume"><b>' + volume(total) +
+    '</b><small>' + share + '% · ' + t('do volume do período') + '</small></div>' +
+    '<p class="activity-time">' + range + ' UTC</p>' +
+    '<div class="service-bars activity-bar" aria-hidden="true">' +
+    '<i class="sent" style="width:' + (100 * peak.up / total) + '%"></i>' +
+    '<i class="received" style="width:' + (100 * peak.down / total) + '%"></i></div>' +
+    '<div class="activity-directions"><span class="up">' + t('Enviado') + ' ' + volume(peak.up) +
+    '</span><span class="down">' + t('Recebido') + ' ' + volume(peak.down) + '</span></div>' +
+    '<p class="hint">' + t('Intervalo pela hora de recepção dos registos.') + '</p>';
+}
+
 function renderServices(rows, total) {
   if (!rows.length) {
     $('port').innerHTML = empty();

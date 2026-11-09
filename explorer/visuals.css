@@ -3,8 +3,19 @@ nav [aria-current] { border-color: var(--line); background: var(--panel); color:
 .refresh-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin: 5px 0 9px; }
 .refresh-bar button, .map-link { font-size: 12px; }
 .refresh-bar small { margin-right: 8px; }
-.archive-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.archive-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 #archive-status { color: var(--muted); }
+.archive-library { margin-bottom: 12px; }
+#archive-list { list-style: none; padding: 0; margin: 10px 0 14px; max-height: 224px; overflow: auto; display: grid; gap: 5px; }
+#archive-list:empty { display: none; }
+#archive-list button { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; text-align: left; align-items: center; gap: 12px; }
+#archive-list button[aria-current] { border-color: var(--up); opacity: 1; }
+#archive-list time { font-variant-numeric: tabular-nums; }
+#archive-list button span { color: var(--up); }
+.activity-volume { display: flex; align-items: baseline; gap: 6px 12px; flex-wrap: wrap; }
+.activity-volume b { font-size: clamp(24px, 3vw, 34px); line-height: 1.15; color: var(--accent); }
+.activity-time { margin: 8px 0 12px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.activity-directions { display: flex; justify-content: space-between; gap: 4px 12px; flex-wrap: wrap; font-size: 13px; }
 .service-card { background: radial-gradient(ellipse at top left, #153347, transparent 60%), var(--panel); }
 .service-share { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; color: var(--muted); }
 .service-share b { color: var(--text); font-size: 22px; font-variant-numeric: tabular-nums; }
@@ -17,6 +28,7 @@ nav [aria-current] { border-color: var(--line); background: var(--panel); color:
 .service-name i { width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; background: var(--segment); }
 .service-row small { display: block; font-size: 11px; font-weight: 500; }
 .service-bars { display: flex; height: 5px; border-radius: 4px; overflow: hidden; background: #223952; margin-bottom: 4px; }
+.service-bars.activity-bar { height: 8px; }
 .service-bars .sent { background: var(--up); }
 .service-bars .received { background: var(--down); }
 .service-total { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }

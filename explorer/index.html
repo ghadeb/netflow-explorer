@@ -62,10 +62,18 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
   <section id="archive-controls" hidden>
     <h1 data-i18n>Arquivos diários</h1>
     <p class="sub" data-i18n>Abre um dia UTC para pesquisar, visualizar e exportar os seus fluxos.</p>
-    <div class="card archive-controls">
-      <button type="button" id="load-day" data-i18n>↑ Importar arquivo .xz</button>
-      <input type="file" id="day-file" accept=".xz,application/x-xz" hidden>
-      <span id="archive-status" role="status"></span>
+    <div class="card archive-library">
+      <div class="card-head">
+        <h2 id="archive-library-title" data-i18n>Arquivos no servidor</h2>
+        <button type="button" id="refresh-archives" data-i18n>Actualizar lista</button>
+      </div>
+      <p id="archive-list-status" class="muted" role="status"></p>
+      <ul id="archive-list" aria-labelledby="archive-library-title"></ul>
+      <div class="archive-controls">
+        <button type="button" id="load-day" data-i18n>↑ Importar arquivo .xz</button>
+        <input type="file" id="day-file" accept=".xz,application/x-xz" hidden>
+        <span id="archive-status" role="status"></span>
+      </div>
     </div>
   </section>
   <section id="map-view" hidden>
@@ -120,6 +128,7 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
     <article class="card"><div class="card-head"><h3 data-i18n>Protocolos</h3></div><div id="proto"></div></article>
     <article class="card"><div class="card-head"><h3 data-i18n>Top origens</h3></div><div id="src" class="rank"></div></article>
     <article class="card"><div class="card-head"><h3 data-i18n>Top destinos</h3></div><div id="dst" class="rank"></div></article>
+    <article class="card peak-card"><div class="card-head"><h3 data-i18n>Pico de actividade</h3></div><div id="activity-peak"></div></article>
     <article class="card full service-card"><div class="card-head"><h3 data-i18n>Portos e serviços de destino</h3><small data-i18n>Selecciona um serviço para filtrar o painel</small></div><div id="port"></div></article>
     <article class="card wide"><div class="card-head"><h3 data-i18n>Conversas · origem → destino</h3></div><div id="pair" class="rank"></div></article>
     <article class="card"><div class="card-head"><h3 data-i18n>ASNs de destino exportados</h3></div><div id="asn" class="rank"></div></article>
@@ -164,7 +173,8 @@ const esc = value => String(value ?? '—').replace(/[&<>"']/g, ch => ({
 
 let filters, anchor, current, chartData, request, statusMessage = '';
 let activeView = 'live', dataset = 'live', archive, loading = false;
-let archiveStatus = '';
+let archiveStatus = '', openingArchive = false;
+let savedDays = [], listingDays = false, catalogMessage = '';
 
 function localize(root = document) {
   for (const node of root.querySelectorAll('[data-i18n]')) {
@@ -306,6 +316,7 @@ function draw(data) {
     $('point').textContent = `${stamp(row.at)} UTC · ${t('Enviado')} ${volume(row.up)} · ${t('Recebido')} ${volume(row.down)}`;
   };
 
+  renderActivityPeak(data);
   renderServices(data.charts.port, totals.total);
   for (const key of ['src','dst','pair','asn']) {
     const rows = data.charts[key];
@@ -438,6 +449,44 @@ $('export').onclick = async () => {
 function renderArchiveStatus() {
   $('archive-status').textContent = archiveStatus ? t(archiveStatus)
     : archive ? t('Arquivo UTC') + ' · ' + archive.date : '';
+  $('load-day').disabled = openingArchive;
+  for (const button of $('archive-list').querySelectorAll('[data-archive-date]')) {
+    const selected = archive?.fromVolume && archive.date === button.dataset.archiveDate;
+    button.disabled = openingArchive || selected;
+    if (selected) button.setAttribute('aria-current', 'true');
+    else button.removeAttribute('aria-current');
+  }
+}
+
+function renderArchiveCatalog() {
+  $('refresh-archives').disabled = listingDays;
+  $('archive-list-status').textContent = t(catalogMessage);
+  $('archive-list').innerHTML = savedDays.map(({date, bytes}) => {
+    const day = esc(date);
+    return '<li><button type="button" data-archive-date="' + day + '">' +
+      '<time datetime="' + day + '">' + day + '</time><small>' + volume(bytes) + '</small>' +
+      '<span>' + t('Abrir') + ' →</span></button></li>';
+  }).join('');
+  renderArchiveStatus();
+}
+
+async function loadArchiveCatalog() {
+  if (listingDays) return;
+  listingDays = true;
+  catalogMessage = 'A listar os arquivos…';
+  renderArchiveCatalog();
+  try {
+    const response = await fetch('/api/archives');
+    const data = await response.json();
+    if (!response.ok) throw Error(data.error);
+    savedDays = data.archives;
+    catalogMessage = savedDays.length ? '' : 'Ainda não há arquivos diários no servidor.';
+  } catch (error) {
+    catalogMessage = requestError(error);
+  } finally {
+    listingDays = false;
+    renderArchiveCatalog();
+  }
 }
 
 function showView(view) {
@@ -462,23 +511,37 @@ function showView(view) {
   }
 }
 for (const button of document.querySelectorAll('[data-view]')) {
-  button.onclick = () => showView(button.dataset.view);
+  button.onclick = () => {
+    showView(button.dataset.view);
+    if (button.dataset.view === 'archive') loadArchiveCatalog();
+  };
 }
+$('refresh-archives').onclick = loadArchiveCatalog;
+$('archive-list').onclick = event => {
+  const button = event.target.closest('[data-archive-date]');
+  if (!button) return;
+  openDay('/api/archives/open', 'application/json',
+    JSON.stringify({date:button.dataset.archiveDate}), true);
+};
 $('load-day').onclick = () => $('day-file').click();
-$('day-file').onchange = async () => {
+$('day-file').onchange = () => {
   const file = $('day-file').files[0];
   $('day-file').value = '';
-  if (!file) return;
-  $('load-day').disabled = true;
+  if (file) openDay('/api/import', 'application/x-xz', file);
+};
+
+async function openDay(url, contentType, body, fromVolume = false) {
+  if (openingArchive) return;
+  openingArchive = true;
   archiveStatus = 'A importar e verificar o arquivo…';
   renderArchiveStatus();
   try {
-    const response = await fetch('/api/import', {
-      method:'POST', headers:{'Content-Type':'application/x-xz'}, body:file
+    const response = await fetch(url, {
+      method:'POST', headers:{'Content-Type':contentType}, body
     });
     const data = await response.json();
     if (!response.ok) throw Error(data.error);
-    archive = data;
+    archive = {...data, fromVolume};
     archiveStatus = '';
     if (activeView === 'archive') {
       const alreadyShowing = dataset === 'archive';
@@ -489,12 +552,12 @@ $('day-file').onchange = async () => {
   } catch (error) {
     archiveStatus = requestError(error);
   } finally {
-    $('load-day').disabled = false;
+    openingArchive = false;
     renderArchiveStatus();
   }
-};
+}
 document.addEventListener('fluxo-languagechange', () => {
-  renderArchiveStatus();
+  renderArchiveCatalog();
   renderMap();
 });
 initMaps();

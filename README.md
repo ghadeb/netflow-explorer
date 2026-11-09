@@ -199,11 +199,15 @@ O acesso directo destina-se à rede privada e a configuração base usa TLS sem 
 ## 5. Painel e arquivos diários
 
 - **Em directo** mostra os dados recentes, a distribuição do volume por porto e
-  serviço e a repartição de bytes enviados e recebidos. Actualiza a cada
-  dez minutos e também com **Actualizar agora**, mantendo os filtros aplicados.
-- **Arquivos** abre um ficheiro diário `fluxo-AAAA-MM-DD.sqlite3.xz`. O contentor
-  verifica e abre uma cópia para pesquisa, gráficos e CSV. A importação mantém o
-  SQLite activo separado e substitui o arquivo de consulta anterior.
+  serviço e a repartição de bytes enviados e recebidos. **Pico de actividade**
+  indica o intervalo UTC com mais bytes nos registos recebidos pelo colector.
+  O painel actualiza a cada dez minutos e também com **Actualizar agora**.
+- **Arquivos** lista os dias disponíveis no volume, do mais recente para o mais
+  antigo, com o tamanho comprimido. Selecciona um dia para pesquisar, visualizar
+  e exportar os seus fluxos. Também podes carregar um `fluxo-AAAA-MM-DD.sqlite3.xz`
+  do teu computador. O contentor verifica o arquivo e abre uma cópia só de leitura
+  em `/archives/.imports`, separada do SQLite activo. Ao abrir outro dia, a cópia
+  de consulta anterior é substituída.
 - **Weathermap** mostra os pares de um host IPv4 nos dois sentidos ou os destinos
   de uma rede de origem CIDR, paginados por volume. Em fluxos individuais,
   **Ver mapa** mostra os endpoints, o exporter e o próximo salto ou interfaces
@@ -230,8 +234,8 @@ linhas constarem do arquivo verificado.
 `FLOW_ARCHIVE_VOLUME` permite indicar outro volume. Para um volume externo
 já existente, conserva o override `-f compose.yaml -f compose.archives.yaml`
 e confirma acesso de escrita para UID/GID 10001. Os ficheiros arquivados
-não expiram automaticamente. Para copiar um dia do volume para o servidor e
-depois o abrir no painel, ajusta a data deste exemplo.
+não expiram automaticamente. Para copiar um dia do volume para guardar fora do
+contentor, ajusta a data deste exemplo.
 
 ```sh
 docker compose cp collector:/archives/fluxo-2026-11-08.sqlite3.xz .
