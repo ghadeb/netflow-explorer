@@ -85,6 +85,8 @@ const FluxoI18n = (() => {
     'Grupo': 'Group',
     'Sem resultados para os filtros seleccionados.': 'No results match the selected filters.',
     'Página': 'Page',
+    'Ir para a página': 'Go to page',
+    'Ir': 'Go',
     'de': 'of',
     'Desconhecido': 'Unknown',
     'Sem dados': 'No data',

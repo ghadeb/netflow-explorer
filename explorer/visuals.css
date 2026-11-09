@@ -69,3 +69,21 @@ nav [aria-current] { border-color: var(--line); background: var(--panel); color:
   .peer-map li:first-child::before { top: 0; }
   .peer-map li { grid-template-columns: minmax(12px, 12%) 1fr; }
 }
+
+.page-picker { position: relative; }
+.page-picker summary { border: 1px solid #36506c; border-radius: 7px; background: #0b1726; padding: 8px 10px; cursor: pointer; font-size: 13px; white-space: nowrap; }
+.page-picker summary[aria-disabled="true"] { border-color: transparent; background: transparent; color: var(--muted); cursor: default; }
+.page-picker summary[aria-disabled="true"]::marker { color: transparent; }
+.page-menu { position: absolute; z-index: 2; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); width: min(17rem, 80vw); box-shadow: 0 5px 24px #050c18aa; }
+.page-menu label { flex: 1; min-width: 0; }
+.page-menu input[type=number] { width: 100%; }
+.page-shortcuts { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; }
+.page-shortcuts button { padding: 5px 7px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.page-shortcuts [aria-current] { border-color: var(--up); color: var(--up); }
+
+@media (max-width: 640px) {
+  #flows .pagination, #map-pages { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  #flows .pagination > :first-child, #map-page { grid-column: 1 / -1; }
+  #map-page { grid-row: 2; justify-self: start; }
+  .page-menu { left: 0; transform: none; }
+}

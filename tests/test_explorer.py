@@ -49,6 +49,22 @@ class ExplorerTest(TestCase):
         with self.assertRaisesRegex(ValueError, "fluxo"):
             server.query(self.db, {"flow_id": str(row), "flow_received": str(NOW-10)}, now=NOW)
 
+    def test_table_page_jump_reuses_snapshot_and_reports_page_size(self):
+        for size in range(1, 52):
+            self.add_flow(size=size)
+        args = {"charts": "0", "size": "25"}
+        first = server.query(self.db, args, now=NOW)
+        self.add_flow(size=10_000)
+
+        snapshot = {"end": first["end"], "ceiling": first["ceiling"]}
+        third = server.query(self.db, {**args, **snapshot, "page": "3"}, now=NOW)
+        self.assertEqual((third["page"], third["size"], third["matches"]), (3, 25, 51))
+        self.assertEqual([row["total"] for row in third["rows"]], [1])
+
+        far = server.query(self.db, {**args, **snapshot, "page": "1000001"}, now=NOW)
+        self.assertEqual(far["page"], 1_000_001)
+        self.assertEqual(far["rows"], [])
+
     def test_network_map_aggregates_sources_and_pages_destinations(self):
         for offset in range(1, 15):
             self.add_flow(dst=f"198.51.100.{offset}", size=offset)

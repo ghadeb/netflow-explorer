@@ -163,7 +163,7 @@ def query(db, args, export=False, now=None):
         "SELECT coalesce(max(rowid),0) FROM records"
     ).fetchone()[0]))
     if (minutes not in WINDOWS or size not in {25, 50, 100}
-            or not 1 <= page <= 1_000_000 or not 0 <= prefix <= 32
+            or not 1 <= page < 2**53 or not 0 <= prefix <= 32
             or group not in {"flow", *GROUPS} or sort not in SORTS
             or direction not in {"", "up", "down"} or len(q) > 160
             or not now - 3600 <= end <= now or not 0 <= ceiling < 2**63):
@@ -241,7 +241,7 @@ def query(db, args, export=False, now=None):
             row["service"] = service(proto, port)
 
     result = {
-        "rows": rows, "totals": totals, "end": end, "ceiling": ceiling, "page": page,
+        "rows": rows, "totals": totals, "end": end, "ceiling": ceiling, "page": page, "size": size,
         "matches": totals["flows"] if group == "flow" else (rows[0]["groups"] if rows else 0),
         "routers": [r[0] for r in db.execute("SELECT address FROM routers ORDER BY address")],
     }

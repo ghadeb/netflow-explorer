@@ -1,3 +1,62 @@
+function makePagePicker(id, navigate) {
+  const root = $('page-picker-template').content.firstElementChild.cloneNode(true);
+  $(id).append(root);
+  const summary = root.querySelector('summary');
+  const menu = root.querySelector('form');
+  const input = menu.elements.page;
+  const shortcuts = root.querySelector('.page-shortcuts');
+  let available = false;
+  let page, pages;
+  function choose(value) {
+    if (!available || !Number.isSafeInteger(value) || value < 1 || value > pages) return;
+    root.open = false;
+    summary.focus();
+    if (value !== page) navigate(value);
+  }
+
+  summary.onclick = event => { if (!available) event.preventDefault(); };
+  root.ontoggle = () => {
+    if (root.open) {
+      input.value = '';
+      input.focus();
+    }
+  };
+  root.onkeydown = event => {
+    if (event.key === 'Escape' && root.open) {
+      event.preventDefault();
+      root.open = false;
+      summary.focus();
+    }
+  };
+  menu.onsubmit = event => {
+    event.preventDefault();
+    choose(input.valueAsNumber);
+  };
+  shortcuts.onclick = event => {
+    const button = event.target.closest('[data-page]');
+    if (button) choose(Number(button.dataset.page));
+  };
+
+  return (data, busy = false) => {
+    page = data?.page ?? 1;
+    pages = data ? Math.max(1, Math.ceil(data.matches / data.size)) : 1;
+    available = pages > 1 && !busy;
+    summary.textContent = data
+      ? t('Página') + ' ' + fmt.format(page) + ' ' + t('de') + ' ' + fmt.format(pages)
+      : t('Página') + ' —';
+    summary.setAttribute('aria-disabled', String(!available));
+    input.max = pages;
+    input.placeholder = String(page);
+    if (!available) root.open = false;
+    const choices = [...new Set([1, page-2, page-1, page, page+1, page+2, pages])]
+      .filter(value => value >= 1 && value <= pages);
+    shortcuts.innerHTML = choices.map(value => '<button type="button" data-page="' + value +
+      '" aria-label="' + t('Página') + ' ' + fmt.format(value) + '"' +
+      (value === page ? ' aria-current="page"' : '') + '>' + fmt.format(value) + '</button>').join('');
+    return pages;
+  };
+}
+
 function renderActivityPeak(data) {
   if (!data.totals.total) {
     $('activity-peak').innerHTML = empty();
@@ -60,7 +119,7 @@ function renderServices(rows, total) {
     '</small></div><div class="service-list">' + details + '</div>';
 }
 
-let mapState, mapRequest;
+let mapState, mapRequest, mapPicker;
 
 function clearMap() {
   mapRequest?.abort();
@@ -146,11 +205,9 @@ function renderMap() {
     ? (mapState.kind === 'flow' ? renderFlowMap(data) : renderPeerMap(data))
     : '<p class="empty">' + esc(t(mapState?.message ||
       'Escolhe um fluxo no painel ou indica um host ou uma rede.')) + '</p>';
-  const pages = data?.size ? Math.ceil(data.matches / data.size) : 0;
+  const pages = mapPicker(data?.size ? data : null);
   $('map-pages').hidden = pages <= 1;
   if (pages > 1) {
-    $('map-page').textContent = t('Página') + ' ' + fmt.format(data.page) +
-      ' ' + t('de') + ' ' + fmt.format(pages);
     $('map-prev').disabled = data.page <= 1;
     $('map-next').disabled = data.page >= pages;
   }
@@ -168,6 +225,10 @@ async function loadMap(kind, query) {
     if (!response.ok) throw Error(data.error);
     if (controller.signal.aborted) return;
     if (data.size) {
+      if (data.page > 1 && !data.rows.length) {
+        query.set('page', 1);
+        return loadMap(kind, query);
+      }
       query.set('end', data.end);
       query.set('ceiling', data.ceiling);
     }
@@ -191,11 +252,13 @@ function initMaps() {
     query.set('network', $('map-form').elements.target.value.trim());
     loadMap('peer', query);
   };
+  const jump = page => {
+    const query = new URLSearchParams(mapState.query);
+    query.set('page', page);
+    loadMap('peer', query);
+  };
+  mapPicker = makePagePicker('map-page', jump);
   for (const [id, delta] of [['map-prev', -1], ['map-next', 1]]) {
-    $(id).onclick = () => {
-      const query = new URLSearchParams(mapState.query);
-      query.set('page', mapState.data.page + delta);
-      loadMap('peer', query);
-    };
+    $(id).onclick = () => jump(mapState.data.page + delta);
   }
 }

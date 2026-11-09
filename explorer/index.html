@@ -90,7 +90,7 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
       <div id="map-content" aria-live="polite"></div>
       <div class="pagination" id="map-pages" hidden>
         <button type="button" id="map-prev" data-i18n>← Anterior</button>
-        <small id="map-page"></small>
+        <div id="map-page"></div>
         <button type="button" id="map-next" data-i18n>Seguinte →</button>
       </div>
     </article>
@@ -146,7 +146,7 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
     <div class="table-scroll"><table><thead id="head"></thead><tbody id="body"></tbody></table></div>
     <div class="pagination">
       <div><button type="button" id="prev" data-i18n>← Anterior</button> <button type="button" id="next" data-i18n>Seguinte →</button></div>
-      <small id="page"></small>
+      <div id="page"></div>
       <select id="size" aria-label="Linhas por página" data-i18n-aria-label="Linhas por página"><option>25</option><option>50</option><option>100</option></select>
     </div>
     <p class="hint" data-i18n>Os sentidos referem-se à LAN monitorizada. Se os dois routers observam o mesmo tráfego, selecciona um router para evitar somar as duas observações.</p>
@@ -154,11 +154,25 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
   </div>
 </main>
 
+<template id="page-picker-template">
+  <details class="page-picker">
+    <summary></summary>
+    <form class="page-menu">
+      <label><span data-i18n>Ir para a página</span>
+        <input type="number" name="page" inputmode="numeric" min="1" step="1" required>
+      </label>
+      <button type="submit" class="primary" data-i18n>Ir</button>
+      <div class="page-shortcuts"></div>
+    </form>
+  </details>
+</template>
+
 <script src="/i18n.js"></script>
 <script src="/visuals.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const form = $('filters');
+const flowPicker = makePagePicker('page', page => load(page, false));
 const names = new Map();
 let savedLanguage;
 try { savedLanguage = localStorage.getItem('fluxo-language'); } catch {}
@@ -238,12 +252,14 @@ async function load(page = 1, charts = true) {
   const controller = new AbortController();
   request = controller;
   loading = true;
+  renderFlowPager();
   status('A consultar o SQLite…');
   try {
     const response = await fetch('/api/view?' + params(page, charts), {signal:controller.signal});
     const data = await response.json();
     if (!response.ok) throw Error(data.error);
     if (controller.signal.aborted) return;
+    if (page > 1 && !data.rows.length) return load(1, charts);
     anchor = {end:data.end, ceiling:data.ceiling};
     current = data;
     const selected = filters.router;
@@ -258,7 +274,11 @@ async function load(page = 1, charts = true) {
   } catch (error) {
     if (!controller.signal.aborted) status(requestError(error), true);
   } finally {
-    if (request === controller) loading = false;
+    if (request === controller) {
+      loading = false;
+      if (current) $('size').value = current.size;
+      renderFlowPager();
+    }
   }
 }
 function refresh() {
@@ -271,7 +291,6 @@ function apply() {
   anchor = {};
   current = null;
   $('export').disabled = true;
-  $('prev').disabled = $('next').disabled = true;
   $('body').innerHTML = '';
   load();
 }
@@ -374,11 +393,14 @@ function table(data) {
     return `<tr>${lead}<td class="number up">${volume(row.up)}</td><td class="number down">${volume(row.down)}</td>
       <td class="number"><b>${volume(row.total)}</b></td><td class="number">${fmt.format(row.packets)}</td>${map}</tr>`;
   }).join('') : `<tr><td colspan="${titles.length}">${t('Sem resultados para os filtros seleccionados.')}</td></tr>`;
-  const pages = Math.max(1, Math.ceil(data.matches / Number($('size').value)));
-  $('page').textContent = `${t('Página')} ${fmt.format(data.page)} ${t('de')} ${fmt.format(pages)}`;
-  $('prev').disabled = data.page <= 1;
-  $('next').disabled = data.page >= pages;
+  renderFlowPager();
   $('export').disabled = !data.rows.length;
+}
+
+function renderFlowPager() {
+  const pages = flowPicker(current, loading);
+  $('prev').disabled = loading || !current || current.page <= 1;
+  $('next').disabled = loading || !current || current.page >= pages;
 }
 
 form.onsubmit = event => { event.preventDefault(); apply(); };
