@@ -81,4 +81,4 @@ NetFlow Explorer is distributed under the [MIT License](LICENSE). The GoFlow2 bi
 
 ---
 
-[Takesignal](https://pt.linkedin.com/company/takesignal) · [MIT License](LICENSE)
+Created by [Takesignal](https://pt.linkedin.com/company/takesignal) 2026 · [MIT License](LICENSE)
