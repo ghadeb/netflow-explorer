@@ -94,6 +94,10 @@ def flow_observation(db, args, params):
     """, (flow_id, received)).fetchone()
     if row is None:
         raise ValueError("Este fluxo já não está disponível. Actualiza o painel.")
+    return observation_from_row(row)
+
+
+def observation_from_row(row):
     observation = dict(row)
     raw = json.loads(observation.pop("flow"))
     for name, field in (("src", "src_addr"), ("dst", "dst_addr"), ("sport", "src_port"),
@@ -148,8 +152,7 @@ def connect(path=DB):
     return db
 
 
-def query(db, args, export=False, now=None):
-    now = int(time()) if now is None else now
+def query_scope(args, now, ceiling, export):
     minutes = int(args.get("minutes", 60))
     size = int(args.get("size", 25))
     page = int(args.get("page", 1))
@@ -159,9 +162,6 @@ def query(db, args, export=False, now=None):
     direction = args.get("direction", "")
     q = args.get("q", "").strip().lower()
     end = int(args.get("end", now))
-    ceiling = int(args.get("ceiling", db.execute(
-        "SELECT coalesce(max(rowid),0) FROM records"
-    ).fetchone()[0]))
     if (minutes not in WINDOWS or size not in {25, 50, 100}
             or not 1 <= page < 2**53 or not 0 <= prefix <= 32
             or group not in {"flow", *GROUPS} or sort not in SORTS
@@ -178,6 +178,17 @@ def query(db, args, export=False, now=None):
                   direction=direction, q=q, prefix=prefix, step=step,
                   limit=EXPORT_LIMIT + 1 if export else size,
                   offset=0 if export else (page - 1) * size)
+
+    return params, group, sort, page, size
+
+
+def query(db, args, export=False, now=None):
+    now = int(time()) if now is None else now
+    ceiling = int(args["ceiling"]) if "ceiling" in args else db.execute(
+        "SELECT coalesce(max(rowid),0) FROM records"
+    ).fetchone()[0]
+    params, group, sort, page, size = query_scope(args, now, ceiling, export)
+    start, end, step, q = (params[key] for key in ("start", "end", "step", "q"))
 
     field, sep, value = q.partition(":")
     filters = {**CHARTS, "router": "router", "sasn": "sasn", "dasn": "dasn"}

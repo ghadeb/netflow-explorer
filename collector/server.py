@@ -123,10 +123,10 @@ def reader(proc, direction, events):
             events.put((direction, line))
 
 
-def get_batch(events):
+def get_batch(events, limit=2000, interval=0.5):
     batch = []
-    deadline = monotonic() + 0.5
-    while len(batch) < 2000:
+    deadline = monotonic() + interval
+    while len(batch) < limit:
         wait = deadline - monotonic()
         if wait <= 0:
             break
@@ -137,7 +137,7 @@ def get_batch(events):
     return batch
 
 
-def run():
+def run(storage=None):
     exporters = {str(IPv4Address(ip.strip())) for ip in os.environ["FLOW_EXPORTERS"].split(",")}
     days = int(os.getenv("RETENTION_DAYS", "30"))
     if not 1 <= days <= 365:
@@ -156,7 +156,17 @@ def run():
     http = ThreadingHTTPServer(("0.0.0.0", 8000), Handler)
     http.exporters, http.resolver = exporters, resolver
     stats = Counter()
-    with closing(open_db(DB)) as db:
+    with closing(open_db(DB) if storage is None else storage) as db:
+        if storage is None:
+            def write_batch(batch):
+                return ingest(db, batch, exporters)
+            batch_options = {}
+            engine = "SQLite"
+        else:
+            def write_batch(batch):
+                return storage.ingest(batch, exporters, stopped)
+            batch_options = {"limit": 10000, "interval": 1}
+            engine = "ClickHouse"
         try:
             for direction, port, metrics in (("up", 2055, 8081), ("down", 2056, 8082)):
                 proc = Popen([
@@ -172,15 +182,16 @@ def run():
             while not stopped.is_set():
                 if any(proc.poll() is not None or not thread.is_alive() for proc, thread in processes):
                     raise RuntimeError("Um receptor GoFlow2 terminou.")
-                batch = get_batch(events)
+                batch = get_batch(events, **batch_options)
                 if batch:
-                    stats["accepted"] += ingest(db, batch, exporters)
+                    stats["accepted"] += write_batch(batch)
                     stats["seen"] += len(batch)
                 if monotonic() >= maintenance:
-                    prune(db, (int(time()) // 60) * 60 - days * 86400)
+                    if storage is None:
+                        prune(db, (int(time()) // 60) * 60 - days * 86400)
                     if stats["seen"]:
-                        LOG.info("SQLite: %d registos guardados, %d ignorados",
-                                 stats["accepted"], stats["seen"] - stats["accepted"])
+                        LOG.info("%s: %d registos guardados, %d ignorados, fila=%d",
+                                 engine, stats["accepted"], stats["seen"] - stats["accepted"], events.qsize())
                     stats.clear()
                     maintenance = monotonic() + 60
         finally:
@@ -189,9 +200,9 @@ def run():
                     proc.terminate()
             if stopped.is_set():
                 while any(thread.is_alive() for _, thread in processes) or not events.empty():
-                    batch = get_batch(events)
+                    batch = get_batch(events, **batch_options)
                     if batch:
-                        ingest(db, batch, exporters)
+                        write_batch(batch)
                     if any(proc.poll() is None for proc, _ in processes):
                         # In the absence of further output, do not let a stuck child delay shutdown.
                         for proc, _ in processes:

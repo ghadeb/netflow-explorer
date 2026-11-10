@@ -45,7 +45,7 @@ def connect(path):
     return db
 
 
-def _parse(direction, raw, allowed):
+def parse_event(direction, raw, allowed):
     try:
         flow = json.loads(raw)
         if direction not in ("up", "down") or flow["type"] != "NETFLOW_V9":
@@ -66,13 +66,13 @@ def _parse(direction, raw, allowed):
         port = int(flow.get("dst_port", 0))
         if protocol not in PORT_PROTOCOLS.values() or not 1 <= port <= 65535:
             port = 0
-        return received, router, direction, client, size, packets, raw, int(IPv4Address(source)), protocol, port
+        return (received, router, direction, client, size, packets, raw, int(IPv4Address(source)), protocol, port), flow
     except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
         return None
 
 
 def ingest(db, events, allowed):
-    rows = [row for direction, raw in events if (row := _parse(direction, raw, allowed))]
+    rows = [parsed[0] for direction, raw in events if (parsed := parse_event(direction, raw, allowed))]
     counts = {}
     ports = {}
     seen = {}
