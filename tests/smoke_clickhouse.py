@@ -77,10 +77,17 @@ def main():
     now = int(time())
     old = (now // DAY - 35) * DAY
     day = datetime.fromtimestamp(old, UTC).date().isoformat()
+    client = Client(timeout=30)
+    codec_query = """
+        SELECT compression_codec FROM system.columns
+        WHERE database='netflow' AND table='flows' AND name='flow'
+    """
+    assert next(client.rows(codec_query))["compression_codec"] == "CODEC(ZSTD(1))"
+    client.execute("ALTER TABLE flows MODIFY COLUMN flow CODEC(LZ4)")
     writer = Writer()
+    assert next(client.rows(codec_query))["compression_codec"] == "CODEC(ZSTD(1))"
     payload, count = encode_batch([synthetic(old, 500)] * 1000, {"127.0.0.1"}, writer.next_id)
     assert count == 1000
-    client = Client(timeout=30)
     settings = {"insert_deduplication_token": str(writer.next_id), "async_insert": 0}
     for _ in range(2):
         client.execute("INSERT INTO flows FORMAT RowBinary", settings=settings, data=payload)

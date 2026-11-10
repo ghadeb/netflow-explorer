@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS flows (
     bytes UInt64,
     packets UInt64,
     proto String,
-    flow String
+    flow String CODEC(ZSTD(1))
 )
 ENGINE = MergeTree
 PARTITION BY intDiv(received, 86400)
@@ -151,6 +151,12 @@ class Writer:
         self.client = Client(timeout=8)
         startup = Client(timeout=60)
         startup.execute(DDL)
+        codec = next(startup.rows("""
+            SELECT compression_codec FROM system.columns
+            WHERE database='netflow' AND table='flows' AND name='flow'
+        """))["compression_codec"]
+        if codec != "CODEC(ZSTD(1))":
+            startup.execute("ALTER TABLE flows MODIFY COLUMN flow CODEC(ZSTD(1))")
         self.committed_id = next(startup.rows("SELECT max(id) AS last FROM flows", streaming=True))["last"]
         self.next_id = max(time_ns(), self.committed_id + 1)
 
