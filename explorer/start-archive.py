@@ -16,7 +16,7 @@ def run():
         import clickhouse_view
 
         storage = Writer()
-        base = clickhouse_view.handler(collector.Handler)
+        base = clickhouse_view.handler(collector.Handler, storage)
         script = "clickhouse_archive.py"
         # Archived and live queries share one dashboard slot on the pilot host.
         daily_archive.panel.QUERIES = clickhouse_view.QUERIES

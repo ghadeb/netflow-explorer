@@ -152,10 +152,9 @@ def chart_data(client, base, params):
     return {"totals": totals, "series": list(bins.values()), "charts": charts, "heat": heat}
 
 
-def query(client, args, export=False, now=None):
+def query(client, args, committed_id, routers, export=False, now=None):
     now = int(time()) if now is None else now
-    ceiling = int(args["ceiling"]) if "ceiling" in args else next(
-        client.rows("SELECT max(id) AS ceiling FROM flows"))["ceiling"]
+    ceiling = min(int(args.get("ceiling", committed_id)), committed_id)
     params, group, sort, page, size = panel.query_scope(args, now, ceiling, export)
     params["router_num"] = int(IPv4Address(params["router"])) if params["router"] else 0
     params["mask"] = (0xffffffff << (32 - params["prefix"])) & 0xffffffff
@@ -198,12 +197,11 @@ def query(client, args, export=False, now=None):
         "rows": rows, "totals": totals, "end": params["end"], "ceiling": str(ceiling),
         "page": page, "size": size, **charts,
         "matches": totals["flows"] if group == "flow" else (rows[0]["groups"] if rows else 0),
-        "routers": [row["address"] for row in client.rows(
-            "SELECT DISTINCT IPv4NumToString(router) AS address FROM flows ORDER BY address")],
+        "routers": sorted(routers),
     }
 
 
-def handler(base):
+def handler(base, storage):
     class ClickHouseHandler(base):
         def do_GET(self):
             url = urlsplit(self.path)
@@ -220,7 +218,7 @@ def handler(base):
             export = url.path == "/api/export"
             try:
                 args = {key: values[0] for key, values in parse_qs(url.query, max_num_fields=16).items()}
-                result = query(Client(), args, export=export)
+                result = query(Client(), args, storage.committed_id, self.server.exporters, export=export)
             except (ValueError, OverflowError) as exc:
                 return self.send_json(400, {"error": str(exc)})
             except ClickHouseError as exc:

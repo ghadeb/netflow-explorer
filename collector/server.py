@@ -182,6 +182,7 @@ def run(storage=None):
             while not stopped.is_set():
                 if any(proc.poll() is not None or not thread.is_alive() for proc, thread in processes):
                     raise RuntimeError("Um receptor GoFlow2 terminou.")
+                stats["queue_peak"] = max(stats["queue_peak"], events.qsize())
                 batch = get_batch(events, **batch_options)
                 if batch:
                     stats["accepted"] += write_batch(batch)
@@ -190,8 +191,9 @@ def run(storage=None):
                     if storage is None:
                         prune(db, (int(time()) // 60) * 60 - days * 86400)
                     if stats["seen"]:
-                        LOG.info("%s: %d registos guardados, %d ignorados, fila=%d",
-                                 engine, stats["accepted"], stats["seen"] - stats["accepted"], events.qsize())
+                        LOG.info("%s: %d registos guardados, %d ignorados, fila_max=%d/%d",
+                                 engine, stats["accepted"], stats["seen"] - stats["accepted"],
+                                 stats["queue_peak"], events.maxsize)
                     stats.clear()
                     maintenance = monotonic() + 60
         finally:

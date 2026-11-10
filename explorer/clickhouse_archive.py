@@ -8,6 +8,7 @@ from time import sleep, time
 import logging
 import lzma
 import os
+import shutil
 import signal
 import sqlite3
 import sys
@@ -32,7 +33,7 @@ def snapshot(client, params):
     return next(client.rows(f"SELECT count() AS rows, max(id) AS last FROM flows WHERE {WINDOW}", params))
 
 
-def copy_snapshot(client, raw, params, day, expected):
+def copy_snapshot(client, raw, params, day, expected, budget):
     sql = f"""
         SELECT id AS source_id, received, IPv4NumToString(router) AS exporter,
                if(sent=1,'up','down') AS direction, IPv4NumToString(if(sent=1,src,dst)) AS client,
@@ -41,8 +42,12 @@ def copy_snapshot(client, raw, params, day, expected):
     """
     received_rows = 0
     with closing(sqlite3.connect(raw)) as db:
-        archives.init_archive(db)
-        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS source_identity ON records(source_id)")
+        page_size = db.execute("PRAGMA page_size").fetchone()[0]
+        max_pages = budget // page_size
+        if max_pages < 16:
+            raise ValueError("Insufficient space for a daily archive.")
+        db.execute(f"PRAGMA max_page_count={max_pages}")
+        archives.init_archive(db, unique_source=True)
         with db:
             before = db.total_changes
             for batch in batched(client.rows(sql, {**params, "last": expected["last"]}, streaming=True), 4096):
@@ -69,25 +74,37 @@ def archive_day(client, day, expire, preset):
     expected = snapshot(client, params)
     if not expected["rows"]:
         return
+    # Leave disk headroom for ClickHouse and for a journal and XZ alongside the staging DB.
+    budget = (shutil.disk_usage(archives.ROOT).free - archives.IMPORT_RESERVE) // 3
+    if budget <= 0:
+        raise ValueError("Insufficient space for a daily archive.")
     with TemporaryDirectory(prefix=".build-", dir=archives.ROOT) as folder:
         work = Path(folder)
         raw = work / "day.sqlite3"
         if destination.exists():
             checksum = destination.with_name(destination.name + ".sha256").read_text().split()[0]
             with destination.open("rb") as stream:
-                archives.unpack(stream, raw, destination.stat().st_size, checksum=checksum)
+                archives.unpack(stream, raw, destination.stat().st_size, limit=budget, checksum=checksum)
             if archives.validate(raw)[0] != day:
                 raise ValueError(f"Archive date differs from {destination.name}.")
 
-        added = copy_snapshot(client, raw, params, day, expected)
+        added = copy_snapshot(client, raw, params, day, expected, budget)
         _, count = archives.validate(raw)
         if added:
             archives.publish(raw, destination, work, preset)
             LOG.info("Verified archive %s: %d records", destination.name, count)
         if expire:
             with ingest_lock():
-                if snapshot(client, params) == expected:
-                    client.execute(f"ALTER TABLE flows DROP PARTITION {day // DAY}")
+                # The partition is append-only. Recheck its count from metadata
+                # under the same lock as INSERT before removing the whole day.
+                partition = day // DAY
+                active = next(client.rows("""
+                    SELECT sum(rows) AS count FROM system.parts
+                    WHERE database='netflow' AND table='flows' AND active
+                      AND partition=toString({partition:UInt32})
+                """, {"partition": partition}))["count"]
+                if active == expected["rows"]:
+                    client.execute(f"ALTER TABLE flows DROP PARTITION {partition}")
                     LOG.info("Expired verified partition %s", date)
 
 

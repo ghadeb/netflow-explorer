@@ -87,7 +87,7 @@ class Client:
         settings = {
             "output_format_json_quote_64bit_integers": 0,
             "max_threads": 1,
-            "max_execution_time": 240 if streaming else 12,
+            "max_execution_time": 0 if streaming else 12,
             "wait_end_of_query": 0 if streaming else 1,
         }
         with self.request(sql + " FORMAT JSONEachRow", params, settings) as response:
@@ -149,8 +149,10 @@ def encode_batch(events, allowed, first_id):
 class Writer:
     def __init__(self):
         self.client = Client(timeout=8)
-        self.client.execute(DDL)
-        self.next_id = max(time_ns(), next(self.client.rows("SELECT max(id) AS last FROM flows"))["last"] + 1)
+        startup = Client(timeout=60)
+        startup.execute(DDL)
+        self.committed_id = next(startup.rows("SELECT max(id) AS last FROM flows", streaming=True))["last"]
+        self.next_id = max(time_ns(), self.committed_id + 1)
 
     def close(self):
         pass
@@ -178,4 +180,5 @@ class Writer:
                         raise
                     delay = min(delay * 2, 5)
         self.next_id += count
+        self.committed_id = self.next_id - 1
         return count

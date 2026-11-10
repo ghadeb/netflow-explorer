@@ -112,7 +112,8 @@ def validate(path):
         return day, count
 
 
-def init_archive(db):
+def init_archive(db, unique_source=False):
+    unique = "UNIQUE " if unique_source else ""
     db.executescript(f"""
         PRAGMA application_id={APP_ID};
         CREATE TABLE IF NOT EXISTS records (
@@ -120,7 +121,7 @@ def init_archive(db):
             router TEXT NOT NULL, direction TEXT NOT NULL, client TEXT NOT NULL,
             bytes INTEGER NOT NULL, packets INTEGER NOT NULL, flow TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS source_row ON records(source_id);
+        CREATE {unique}INDEX IF NOT EXISTS source_row ON records(source_id);
         CREATE INDEX IF NOT EXISTS records_received ON records(received);
         CREATE TABLE IF NOT EXISTS routers(address TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS archive_info(day INTEGER, rows INTEGER);
