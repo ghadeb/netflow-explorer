@@ -1,0 +1,45 @@
+name: fluxo
+
+services:
+  collector:
+    image: fluxo-collector:latest
+    build: .
+    platform: linux/amd64
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      FLOW_EXPORTERS: ${FLOW_EXPORTERS:?Set the exporter source IPv4 addresses}
+      RETENTION_DAYS: ${RETENTION_DAYS:-30}
+      PTR_DNS: ${PTR_DNS:-}
+      TLS_VERIFY_HOST: ${TLS_VERIFY_HOST:-}
+      NETFLOW_WEB_BIND: ${NETFLOW_WEB_BIND:-127.0.0.1}
+    ports:
+      - "${NETFLOW_UDP_BIND:-127.0.0.1}:2055:2055/udp"
+      - "${NETFLOW_UDP_BIND:-127.0.0.1}:2056:2056/udp"
+      - "${NETFLOW_WEB_BIND:-127.0.0.1}:8001:8000/tcp"
+    volumes:
+      - sqlite-data:/data
+      - archive-data:/archives
+      - type: bind
+        source: ./tls-fluxo
+        target: /tls
+        read_only: true
+        bind:
+          create_host_path: false
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python", "/painel/healthcheck.py"]
+      interval: 20s
+      timeout: 4s
+      retries: 3
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  sqlite-data:
+  archive-data:
+    name: "${FLOW_ARCHIVE_VOLUME:-fluxo-archives}"

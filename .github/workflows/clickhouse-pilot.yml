@@ -1,7 +1,7 @@
-name: ClickHouse pilot smoke test
+name: ClickHouse integration test
 on:
   push:
-    branches: [ghadeb/clickhouse-pilot]
+    branches: [main, ghadeb/clickhouse-pilot]
 permissions:
   contents: read
 
@@ -55,12 +55,16 @@ jobs:
           umask 077
           printf 'FLOW_EXPORTERS=127.0.0.1\nCLICKHOUSE_PASSWORD=%s\n' "$(openssl rand -hex 24)" > .env
           ./scripts/tls.sh 127.0.0.1
-      - name: Build and start the AMD64 pilot
-        run: docker compose -f compose.clickhouse.yaml up -d --build --wait --wait-timeout 150
+      - name: Check the default and compatibility configurations
+        run: |
+          diff <(docker compose config) <(docker compose -f compose.clickhouse.yaml config)
+          docker compose -f compose.sqlite.yaml config -q
+      - name: Build and start the AMD64 stack
+        run: docker compose up -d --build --wait --wait-timeout 150
       - name: Test UDP, live queries and archives
         run: |
-          docker compose -f compose.clickhouse.yaml cp tests/smoke_udp.py collector:/tmp/smoke_udp.py
-          docker compose -f compose.clickhouse.yaml exec -T collector python - < tests/smoke_clickhouse.py
+          docker compose cp tests/smoke_udp.py collector:/tmp/smoke_udp.py
+          docker compose exec -T collector python - < tests/smoke_clickhouse.py
       - name: Report logs on failure
         if: failure()
-        run: docker compose -f compose.clickhouse.yaml logs --tail=100
+        run: docker compose logs --tail=100

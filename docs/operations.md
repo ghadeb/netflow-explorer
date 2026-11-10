@@ -94,30 +94,34 @@ sudo tcpdump -ni eth0 -c 20 'udp dst port 2055 or udp dst port 2056'
 docker compose logs --tail=100 collector
 ```
 
-Query records from the last 15 minutes using a read-only connection.
+Query records from the last 15 minutes.
 
 ```sh
-docker compose exec -T collector python - <<'PY'
-import sqlite3
-db = sqlite3.connect("file:/data/flows.sqlite3?mode=ro", uri=True)
-for row in db.execute("""
-    SELECT router, direction, count(*), sum(bytes),
-           datetime(min(received), 'unixepoch'), datetime(max(received), 'unixepoch')
-    FROM records WHERE received >= unixepoch('now', '-15 minutes')
-    GROUP BY router, direction ORDER BY router, direction
-"""):
-    print(*row, sep="\t")
-PY
+docker compose exec -T clickhouse sh -c \
+  'exec clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --database netflow' <<'SQL'
+SELECT IPv4NumToString(router) AS exporter,
+       if(sent = 1, 'up', 'down') AS direction,
+       count() AS records,
+       sum(bytes) AS traffic_bytes,
+       toDateTime(min(received), 'UTC') AS first_received,
+       toDateTime(max(received), 'UTC') AS last_received
+FROM flows
+WHERE received >= toUnixTimestamp(now() - INTERVAL 15 MINUTE)
+GROUP BY exporter, direction
+ORDER BY exporter, direction;
+SQL
 ```
 
-The output gives the exporter, direction, record count, byte count, and first and last receipt times in UTC. Keep the output with the device and interface details and exporter counters when collecting evidence.
+Keep the output with the device and interface details and exporter counters when collecting evidence. Use **Export CSV** in the dashboard to capture a filtered set of flow records. See the [storage and compression guide](clickhouse-pilot.md#storage-and-compression) for daily archives and the legacy volume backup.
+
+### Snapshot the legacy SQLite database
 
 Use the SQLite backup API for a consistent database copy during ingestion. Reserve disk space and protect the snapshot because it contains traffic metadata.
 
 ```sh
 umask 077
 snapshot="fluxo-$(date -u +%Y%m%dT%H%M%SZ).sqlite3"
-docker compose exec -T collector python - > "$snapshot" <<'PY'
+docker compose -f compose.sqlite.yaml exec -T collector python - > "$snapshot" <<'PY'
 from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -154,12 +158,12 @@ For the PTR test, use an address with a known reverse record. The container must
 
 ## Manage archives and capacity
 
-Set `FLOW_ARCHIVE_VOLUME` to override the archive volume name. To use an existing external Docker volume, run Compose with `-f compose.yaml -f compose.archives.yaml` and confirm write access for UID/GID 10001.
+To use an existing external archive volume for ClickHouse, set `FLOW_ARCHIVE_VOLUME` and run Compose with `-f compose.yaml -f compose.archives.yaml`. Use a volume dedicated to the ClickHouse stack and confirm write access for UID/GID 10001.
 
 ```sh
 docker compose cp collector:/archives/fluxo-YYYY-MM-DD.sqlite3.xz .
-docker compose exec collector du -h /data /archives
+docker compose exec collector du -h /archives
 docker compose logs --tail=100 collector
 ```
 
-Replace the date with the archive you want to copy. SQLite reuses space as records expire. The archive volume keeps growing as new files are written. A broad 30-day query can exceed the query time limit on busy deployments. Use a shorter range or filter by exporter, endpoint or service. Use `docker compose stop` to stop the collector and keep both volumes.
+Replace the date with the archive you want to copy. ClickHouse removes a daily partition after expiry and archive verification. The archive volume keeps growing as new files are written. A broad 30-day query can exceed the query time limit on busy deployments. Use a shorter range or filter by exporter, endpoint or service. Use `docker compose stop` to stop the stack and keep both volumes.
