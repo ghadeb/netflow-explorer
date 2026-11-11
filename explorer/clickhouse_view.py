@@ -1,5 +1,5 @@
 """Serve the existing dashboard API over the live ClickHouse table."""
-from ipaddress import IPv4Address, IPv4Network
+from ipaddress import IPv4Address
 from threading import BoundedSemaphore
 from time import time
 from urllib.parse import parse_qs, urlsplit
@@ -103,6 +103,9 @@ def search_predicate(params):
     if sep and field in aliases:
         params["q"] = value.strip()
         predicate = f"lowerUTF8(toString({aliases[field]})) = {{q:String}}"
+    elif (address := panel.ipv4_number(params["q"])) is not None:
+        params["search_ip"] = address
+        predicate = "(src_num={search_ip:UInt32} OR dst_num={search_ip:UInt32} OR router_num={search_ip:UInt32})"
     elif params["q"]:
         # Service labels are local reference data. Compare their port keys in SQL.
         ports = [key for key, label in panel.SERVICES.items() if params["q"] in label.lower()]
@@ -176,42 +179,37 @@ def grouped_page(client, base, params, group, order):
     return rows, matches
 
 
-def destination_map(client, base, params, target, page):
+def destination_map(client, base, params, target):
     host = "/" not in target
-    try:
-        network = IPv4Network(target, strict=False)
-    except ValueError as exc:
-        raise ValueError("Indica um endereço IPv4 ou uma rede IPv4 em formato CIDR.") from exc
-    params = dict(params, first=int(network.network_address), last=int(network.broadcast_address),
-                  map_offset=(page - 1) * panel.NETWORK_PAGE_SIZE)
+    network = panel.map_network(target)
+    params = dict(params, first=int(network.network_address), last=int(network.broadcast_address))
     peer = "if(src_num={first:UInt32},dst_num,src_num)" if host else "dst_num"
     match = "(src_num={first:UInt32} OR dst_num={first:UInt32})" if host else "src_num BETWEEN {first:UInt32} AND {last:UInt32}"
-    grouped = f"""
-        SELECT {peer} AS peer_num, {TOTALS},
+    # Count only up to the display limit for each mask. The aggregate state
+    # stays bounded even when the target covers hundreds of thousands of IPs.
+    counts = ", ".join(
+        f"uniqUpTo({panel.MAP_NODE_LIMIT})(bitAnd({peer}, toUInt32({panel.map_mask(prefix)}))) AS n{prefix}"
+        for prefix in panel.MAP_PREFIXES[:-1]
+    )
+    source = f"FROM filtered WHERE {match}"
+    sizes = next(client.rows(f"{base}SELECT {counts} {source}", params))
+    prefix = next((p for p in panel.MAP_PREFIXES[:-1] if sizes[f"n{p}"] <= panel.MAP_NODE_LIMIT),
+                  panel.MAP_PREFIXES[-1])
+    params["map_mask"] = panel.map_mask(prefix)
+    rows = list(client.rows(base + f"""
+        SELECT bitAnd({peer}, {{map_mask:UInt32}}) AS peer_num, {TOTALS},
                sumIf(bytes, src_num={{first:UInt32}}) AS from_host,
                sumIf(bytes, src_num!={{first:UInt32}}) AS to_host
-        FROM filtered WHERE {match} GROUP BY peer_num
-    """
-    rows = list(client.rows(base + f"""
-        SELECT IPv4NumToString(peer_num) AS peer, * EXCEPT (peer_num) FROM ({grouped})
-        ORDER BY total DESC, peer LIMIT {panel.NETWORK_PAGE_SIZE} OFFSET {{map_offset:UInt64}}
+        {source} GROUP BY peer_num
     """, params, settings=QUERY_SETTINGS))
-    summary = next(client.rows(base + f"""
-        SELECT count() AS matches, sum(total) AS network_total, max(total) AS peak FROM ({grouped})
-    """, params, settings=QUERY_SETTINGS))
-    for row in rows:
-        row.update(summary)
-    return {"target": str(network.network_address) if host else str(network),
-            "host": host, "rows": rows, "matches": summary["matches"],
-            "total": summary["network_total"], "peak": summary["peak"], "page": page,
-            "size": panel.NETWORK_PAGE_SIZE, "end": params["end"], "ceiling": str(params["ceiling"])}
+    return panel.map_result(network, host, prefix, rows, params)
 
 
-def observation(client, args, params):
+def observation(client, args, ceiling):
     flow_id = int(args["flow_id"])
     received = int(args.get("flow_received", 0))
     error = "Este fluxo já não está disponível. Actualiza o painel."
-    if not (1 <= flow_id <= params["ceiling"] and params["start"] <= received < params["end"]):
+    if not (1 <= flow_id <= ceiling and 0 < received < 2**32):
         raise ValueError(error)
     rows = list(client.rows("""
         SELECT received, IPv4NumToString(router) AS router_ip,
@@ -272,15 +270,15 @@ def chart_data(client, base, params):
 def query(client, args, committed_id, routers, export=False, now=None):
     now = int(time()) if now is None else now
     ceiling = min(int(args.get("ceiling", committed_id)), committed_id)
+    if not export and "flow_id" in args:
+        return observation(client, args, ceiling)
     params, group, sort, page, size = panel.query_scope(args, now, ceiling, export)
     params["router_num"] = int(IPv4Address(params["router"])) if params["router"] else 0
     params["mask"] = (0xffffffff << (32 - params["prefix"])) & 0xffffffff
-    if not export and "flow_id" in args:
-        return observation(client, args, params)
     predicate = search_predicate(params)
     base = filtered(predicate)
     if not export and "network" in args:
-        return destination_map(client, base, params, args["network"], page)
+        return destination_map(client, base, params, args["network"])
 
     charts = chart_data(client, base, params) if not export and args.get("charts") != "0" else {}
     totals = charts["totals"] if charts else next(client.rows(base + f"SELECT {TOTALS} FROM filtered", params))

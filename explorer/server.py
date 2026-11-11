@@ -29,7 +29,8 @@ WINDOWS = {15, 60, 360, 1440, 10080, 43200}
 EXPORT_LIMIT = 50_000
 QUERIES = BoundedSemaphore(2)
 LOOKUPS = BoundedSemaphore(4)
-NETWORK_PAGE_SIZE = 12
+MAP_NODE_LIMIT = 12
+MAP_PREFIXES = (32, 24, 16, 8, 3)
 LOG = logging.getLogger("fluxo.ptr")
 
 TOTALS = """
@@ -83,10 +84,10 @@ def reported_hop(value):
     return None if address.is_unspecified else str(address)
 
 
-def flow_observation(db, args, params):
+def flow_observation(db, args, ceiling):
     flow_id = int(args["flow_id"])
     received = int(args.get("flow_received", 0))
-    if not (1 <= flow_id <= params["ceiling"] and params["start"] <= received < params["end"]):
+    if not (1 <= flow_id <= min(ceiling, 2**63 - 1) and 0 < received < 2**32):
         raise ValueError("Este fluxo já não está disponível. Actualiza o painel.")
     row = db.execute("""
         SELECT received, router, direction, bytes, packets, flow
@@ -115,34 +116,52 @@ def observation_from_row(row):
     return observation
 
 
-def destination_map(db, base, params, target, page):
-    host = "/" not in target
+def map_network(target):
     try:
-        network = IPv4Network(target, strict=False)
+        return IPv4Network(target, strict=False)
     except ValueError as exc:
         raise ValueError("Indica um endereço IPv4 ou uma rede IPv4 em formato CIDR.") from exc
+
+
+def map_mask(prefix):
+    return (0xffffffff << (32 - prefix)) & 0xffffffff
+
+
+def map_result(network, host, prefix, rows, params):
+    for row in rows:
+        address = str(IPv4Address(row.pop("peer_num")))
+        row["peer"] = address if prefix == 32 else f"{address}/{prefix}"
+    rows.sort(key=lambda row: (-row["total"], row["peer"]))
+    return {"target": str(network.network_address) if host else str(network),
+            "host": host, "rows": rows, "matches": len(rows),
+            "aggregation_prefix": None if prefix == 32 else prefix,
+            "total": sum(row["total"] for row in rows),
+            "peak": rows[0]["total"] if rows else 0,
+            "end": params["end"], "ceiling": str(params["ceiling"])}
+
+
+def destination_map(db, base, params, target):
+    host = "/" not in target
+    network = map_network(target)
     params = dict(params, address=str(network.network_address),
                   first=int(network.network_address), last=int(network.broadcast_address),
-                  map_size=NETWORK_PAGE_SIZE, map_offset=(page - 1) * NETWORK_PAGE_SIZE)
+                  map_limit=MAP_NODE_LIMIT + 1)
     peer = "CASE WHEN src=:address THEN dst ELSE src END" if host else "dst"
     match = "(src=:address OR dst=:address)" if host else "ipv4_number(src) BETWEEN :first AND :last"
+    eligible = f"FROM filtered WHERE src IS NOT NULL AND dst IS NOT NULL AND ipv4_number({peer}) IS NOT NULL AND {match}"
+    key = f"ipv4_number({peer}) & :map_mask"
+    for prefix in MAP_PREFIXES:
+        params["map_mask"] = map_mask(prefix)
+        groups = db.execute(f"{base}SELECT DISTINCT {key} {eligible} LIMIT :map_limit", params).fetchall()
+        if len(groups) <= MAP_NODE_LIMIT:
+            break
     rows = [dict(row) for row in db.execute(base + f"""
-        SELECT {peer} AS peer, {TOTALS}, count(*) OVER () AS matches,
-               sum(sum(bytes)) OVER () AS network_total, max(sum(bytes)) OVER () AS peak,
+        SELECT {key} AS peer_num, {TOTALS},
                sum(CASE WHEN src=:address THEN bytes ELSE 0 END) AS from_host,
                sum(CASE WHEN src!=:address THEN bytes ELSE 0 END) AS to_host
-        FROM filtered
-        WHERE src IS NOT NULL AND dst IS NOT NULL AND {match}
-        GROUP BY 1
-        ORDER BY total DESC, peer
-        LIMIT :map_size OFFSET :map_offset
+        {eligible} GROUP BY peer_num
     """, params)]
-    summary = rows[0] if rows else {"matches": 0, "network_total": 0, "peak": 0}
-    return {"target": str(network.network_address) if host else str(network),
-            "host": host, "rows": rows, "matches": summary["matches"],
-            "total": summary["network_total"], "peak": summary["peak"],
-            "page": page, "size": NETWORK_PAGE_SIZE,
-            "end": params["end"], "ceiling": params["ceiling"]}
+    return map_result(network, host, prefix, rows, params)
 
 
 def connect(path=DB):
@@ -190,6 +209,8 @@ def query(db, args, export=False, now=None):
     ceiling = int(args["ceiling"]) if "ceiling" in args else db.execute(
         "SELECT coalesce(max(rowid),0) FROM records"
     ).fetchone()[0]
+    if not export and "flow_id" in args:
+        return flow_observation(db, args, ceiling)
     params, group, sort, page, size = query_scope(args, now, ceiling, export)
     start, end, step, q = (params[key] for key in ("start", "end", "step", "q"))
 
@@ -198,6 +219,8 @@ def query(db, args, export=False, now=None):
     if sep and field in filters:
         params["q"] = value.strip()
         match = f"lower(CAST(({filters[field]}) AS TEXT)) = :q"
+    elif ipv4_number(q) is not None:
+        match = "(:q=src OR :q=dst OR :q=router)"
     elif q:
         match = """instr(lower(printf('%s %s %s %s %s %s AS%s AS%s %s',
                   router, src, dst, sport, dport, proto, sasn, dasn,
@@ -221,11 +244,8 @@ def query(db, args, export=False, now=None):
           AND (:router='' OR router=:router) AND (:direction='' OR direction=:direction)
     ), filtered AS (SELECT * FROM base WHERE {match})
     """
-    if not export:
-        if "flow_id" in args:
-            return flow_observation(db, args, params)
-        if "network" in args:
-            return destination_map(db, base, params, args["network"], page)
+    if not export and "network" in args:
+        return destination_map(db, base, params, args["network"])
 
     totals = dict(db.execute(base + f"SELECT {TOTALS} FROM filtered", params).fetchone())
     if export and group == "flow" and totals["flows"] > EXPORT_LIMIT:
@@ -251,6 +271,7 @@ def query(db, args, export=False, now=None):
         raise ValueError("A exportação excede 50 000 linhas. Reduz o período ou aplica um filtro.")
     for row in rows:
         if group == "flow":
+            row["id"] = str(row["id"])
             row["service"] = service(row["proto"], row["dport"])
         elif group == "port" and "/" in row["key"]:
             proto, port = row["key"].split("/", 1)

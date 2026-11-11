@@ -72,6 +72,7 @@ const FluxoI18n = (() => {
     'Sáb': 'Sat',
     'Dom': 'Sun',
     'Resolver': 'Resolve',
+    'Pesquisar IP': 'Search IP',
     'Sem PTR': 'No PTR record',
     'Tráfego agregado': 'Aggregated traffic',
     'registo': 'record',
@@ -146,6 +147,9 @@ const FluxoI18n = (() => {
     'Destinos da rede': 'Network destinations',
     'pares': 'peers',
     'destinos': 'destinations',
+    'redes': 'networks',
+    'Agregação automática': 'Automatic aggregation',
+    'A carregar o mapa…': 'Loading map…',
     'Usa os filtros do painel': 'Uses dashboard filters',
     'Escolhe um fluxo no painel ou indica um host ou uma rede.':
       'Select a flow in the dashboard or enter a host or network.',

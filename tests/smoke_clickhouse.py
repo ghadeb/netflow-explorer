@@ -184,10 +184,11 @@ def test_many_distinct_pairs():
                                      ceiling, {"192.0.2.1"}, now=now)
         assert page["matches"] == count and len(page["rows"]) == 25
         assert [row["total"] for row in page["rows"]] == list(range(count - 25, count - 50, -1))
-    network = clickhouse_view.query(client, {**scope, "network": "203.0.0.0/8", "page": "2"},
+    network = clickhouse_view.query(client, {**scope, "network": "203.0.0.0/8"},
                                     ceiling, {"192.0.2.1"}, now=now)
-    assert network["matches"] == count and network["total"] == total and network["peak"] == count
-    assert [row["total"] for row in network["rows"]] == list(range(count - 12, count - 24, -1))
+    assert network["aggregation_prefix"] == 16 and len(network["rows"]) <= 12, network
+    assert network["total"] == total and sum(row["flows"] for row in network["rows"]) == count
+    assert "page" not in network
     print("OK: exact live pages, totals and rankings for 400,000 flows with a 144 MB query limit")
 
 
@@ -205,6 +206,8 @@ def main():
     assert isinstance(row["id"], str)
     observation = view(**scope, flow_id=row["id"], flow_received=row["received"], charts=0)
     assert observation["src"] == row["src"]
+    assert view(flow_id=row["id"], flow_received=row["received"], end=1)["src"] == row["src"]
+    assert view(**scope, q="198.51.100.9", charts=0)["matches"] == 2
     assert view(**scope, network="203.0.113.25", charts=0)["rows"][0]["to_host"] > 0
     assert view(**scope, network="203.0.113.0/24", charts=0)["rows"][0]["peer"] == "198.51.100.9"
     assert b"https" in api("api/export", {**scope, "direction": "up"})

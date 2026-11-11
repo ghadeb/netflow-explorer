@@ -119,7 +119,7 @@ function renderServices(rows, total) {
     '</small></div><div class="service-list">' + details + '</div>';
 }
 
-let mapState, mapRequest, mapPicker;
+let mapState, mapRequest;
 
 function clearMap() {
   mapRequest?.abort();
@@ -132,12 +132,13 @@ function clearArchiveMap() {
 }
 
 function mapEndpoint(ip, port) {
-  return ip ? esc(port > 0 ? ip + ':' + port : ip) : '—';
+  return ip ? ipSearchButton(ip, port > 0 ? ip + ':' + port : ip) : '—';
 }
 
-function mapNode(label, value, detail = '') {
-  return '<div class="map-node"><small>' + t(label) + '</small><b>' + value +
-    '</b>' + (detail ? '<small>' + detail + '</small>' : '') + '</div>';
+function mapNode(label, value, detail = '', role = '') {
+  return '<li class="map-node ' + role + '"><span class="map-marker" aria-hidden="true"></span>' +
+    '<div><small>' + t(label) + '</small><b>' + value +
+    '</b>' + (detail ? '<small>' + detail + '</small>' : '') + '</div></li>';
 }
 
 function renderFlowMap(flow) {
@@ -147,13 +148,13 @@ function renderFlowMap(flow) {
     flow.out_if > 0 ? t('Saída') + ' #' + esc(flow.out_if) : '',
   ].filter(Boolean).join(' · ');
   const nodes = [
-    mapNode('Origem', mapEndpoint(flow.src, flow.sport), asn(flow.sasn)),
-    mapNode('Exportador NetFlow', esc(flow.router), interfaces),
+    mapNode('Origem', mapEndpoint(flow.src, flow.sport), asn(flow.sasn), 'map-origin'),
+    mapNode('Exportador NetFlow', mapEndpoint(flow.router), interfaces, 'map-exporter'),
   ];
   if (flow.next_hop && ![flow.src, flow.router, flow.dst].includes(flow.next_hop)) {
-    nodes.push(mapNode('Próximo salto exportado', esc(flow.next_hop)));
+    nodes.push(mapNode('Próximo salto exportado', mapEndpoint(flow.next_hop)));
   }
-  nodes.push(mapNode('Destino', mapEndpoint(flow.dst, flow.dport), asn(flow.dasn)));
+  nodes.push(mapNode('Destino', mapEndpoint(flow.dst, flow.dport), asn(flow.dasn), 'map-destination'));
   const details = [
     ['Protocolo / serviço', esc([t(flow.proto), flow.service].filter(Boolean).join(' · '))],
     ['Volume total', volume(flow.bytes)],
@@ -168,30 +169,46 @@ function renderFlowMap(flow) {
   if (flow.bgp_next_hop) details.push(['Próximo salto BGP', esc(flow.bgp_next_hop)]);
   const fields = details.map(([key, value]) =>
     '<div><dt>' + t(key) + '</dt><dd>' + value + '</dd></div>').join('');
-  return '<p class="hint">' + t('Os troços tracejados representam segmentos sem visibilidade no NetFlow.') +
-    '</p><div class="flow-path">' + nodes.join('<i class="map-gap" aria-hidden="true"></i>') +
-    '</div><dl class="map-fields">' + fields + '</dl>';
+  return '<ol class="flow-path" style="--nodes:' + nodes.length + '">' + nodes.join('') +
+    '</ol><p class="map-note"><i aria-hidden="true"></i>' +
+    t('Os troços tracejados representam segmentos sem visibilidade no NetFlow.') +
+    '</p><dl class="map-fields">' + fields + '</dl>';
 }
 
 function renderPeerMap(data) {
   if (!data.rows.length) return empty();
-  const caption = fmt.format(data.matches) + ' ' + t(data.host ? 'pares' : 'destinos') +
-    ' · ' + volume(data.total);
-  const root = mapNode(data.host ? 'Host' : 'Rede de origem', esc(data.target), caption);
+  const prefix = data.aggregation_prefix;
+  const count = fmt.format(data.rows.length) + ' ' +
+    t(prefix ? 'redes' : data.host ? 'pares' : 'destinos');
+  const root = '<div class="peer-hub"><small>' + t(data.host ? 'Host' : 'Rede de origem') +
+    '</small><b>' + (data.host ? ipSearchButton(data.target) : esc(data.target)) +
+    '</b><strong>' + volume(data.total) + '</strong></div>';
+  const step = 62;
+  const height = step * data.rows.length;
+  const curves = data.rows.map((row, index) => {
+    const y = step * (index + .5);
+    const width = 1.5 + 6 * Math.sqrt(row.total / Math.max(1, data.peak));
+    return '<path d="M0 ' + height / 2 + ' C45 ' + height / 2 + ' 45 ' + y +
+      ' 100 ' + y + '" stroke-width="' + width + '"/>';
+  }).join('');
   const leaves = data.rows.map(row => {
-    const thickness = 2 + 12 * Math.sqrt(row.total / Math.max(1, data.peak));
     const breakdown = data.host
-      ? '→ ' + volume(row.from_host) + ' · ← ' + volume(row.to_host)
+      ? '<span class="up">→ ' + volume(row.from_host) + '</span> · <span class="down">← ' +
+        volume(row.to_host) + '</span>'
       : fmt.format(row.flows) + ' ' + t(row.flows === 1 ? 'registo' : 'registos');
-    return '<li><i class="map-branch" aria-hidden="true" style="--weight:' + thickness +
-      'px"></i><div class="map-node"><b>' + esc(row.peer) +
-      '</b><small>' + breakdown + '</small><strong>' + volume(row.total) + '</strong></div></li>';
+    return '<li><div class="peer-leaf"><span class="peer-dot" aria-hidden="true"></span>' +
+      '<div><b>' + (prefix ? esc(row.peer) : ipSearchButton(row.peer)) +
+      '</b><small>' + breakdown + '</small></div><strong>' + volume(row.total) + '</strong></div></li>';
   }).join('');
   const hint = data.host
     ? t('→ Do host para o par · ← Do par para o host')
     : t('Da rede de origem para cada destino observado');
-  return '<p class="hint">' + hint + ' · ' + t('Espessura por volume') +
-    '</p><div class="peer-map">' + root + '<ul>' + leaves + '</ul></div>';
+  const aggregation = prefix ? ' · ' + t('Agregação automática') + ' /' + prefix : '';
+  return '<div class="map-meta"><span>' + count + aggregation +
+    '</span><span>' + t('Espessura por volume') + '</span></div>' +
+    '<div class="peer-map">' + root + '<div class="peer-fan">' +
+    '<svg viewBox="0 0 100 ' + height + '" preserveAspectRatio="none" aria-hidden="true">' +
+    curves + '</svg><ul>' + leaves + '</ul></div></div><p class="map-note">' + hint + '</p>';
 }
 
 function renderMap() {
@@ -199,40 +216,24 @@ function renderMap() {
   const query = mapState?.query;
   const archiveMode = query ? query.has('archive') : dataset === 'archive';
   $('map-source').textContent = (archiveMode ? t('Arquivo UTC') + ' · ' + archive.date : t('Em directo')) +
-    ' · ' + t('Usa os filtros do painel');
+    (mapState?.kind === 'flow' ? '' : ' · ' + t('Usa os filtros do painel'));
   $('map-title').textContent = t(mapState?.kind === 'flow' ? 'Fluxo observado'
     : data?.host ? 'Pares do host' : data ? 'Destinos da rede' : 'Mapa de tráfego');
   $('map-content').innerHTML = data
     ? (mapState.kind === 'flow' ? renderFlowMap(data) : renderPeerMap(data))
     : '<p class="empty">' + esc(t(mapState?.message ||
       'Escolhe um fluxo no painel ou indica um host ou uma rede.')) + '</p>';
-  const pages = mapPicker(data?.size ? data : null);
-  $('map-pages').hidden = pages <= 1;
-  if (pages > 1) {
-    $('map-prev').disabled = data.page <= 1;
-    $('map-next').disabled = data.page >= pages;
-  }
 }
 
 async function loadMap(kind, query) {
   mapRequest?.abort();
   const controller = new AbortController();
   mapRequest = controller;
-  mapState = {kind, query, message:'A consultar o SQLite…'};
+  mapState = {kind, query, message:'A carregar o mapa…'};
   renderMap();
   try {
-    const response = await fetch('/api/view?' + query, {signal:controller.signal});
-    const data = await response.json();
-    if (!response.ok) throw Error(data.error);
+    const data = await viewResponse(query, controller.signal);
     if (controller.signal.aborted) return;
-    if (data.size) {
-      if (data.page > 1 && !data.rows.length) {
-        query.set('page', 1);
-        return loadMap(kind, query);
-      }
-      query.set('end', data.end);
-      query.set('ceiling', data.ceiling);
-    }
     mapState.data = data;
   } catch (error) {
     if (!controller.signal.aborted) mapState.message = requestError(error);
@@ -253,13 +254,4 @@ function initMaps() {
     query.set('network', $('map-form').elements.target.value.trim());
     loadMap('peer', query);
   };
-  const jump = page => {
-    const query = new URLSearchParams(mapState.query);
-    query.set('page', page);
-    loadMap('peer', query);
-  };
-  mapPicker = makePagePicker('map-page', jump);
-  for (const [id, delta] of [['map-prev', -1], ['map-next', 1]]) {
-    $(id).onclick = () => jump(mapState.data.page + delta);
-  }
 }

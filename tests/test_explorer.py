@@ -49,6 +49,18 @@ class ExplorerTest(TestCase):
         with self.assertRaisesRegex(ValueError, "fluxo"):
             server.query(self.db, {"flow_id": str(row), "flow_received": str(NOW-10)}, now=NOW)
 
+    def test_flow_map_opens_an_old_dashboard_row(self):
+        row = self.add_flow()
+        data = server.query(self.db, {"flow_id": str(row), "flow_received": str(NOW-5)}, now=NOW+7200)
+        self.assertEqual(data["received"], NOW-5)
+
+    def test_ip_search_matches_either_endpoint_exactly(self):
+        self.add_flow(src="203.0.113.1")
+        self.add_flow(dst="203.0.113.1")
+        self.add_flow(src="203.0.113.10")
+        data = server.query(self.db, {"q": "203.0.113.1"}, now=NOW)
+        self.assertEqual(data["matches"], 2)
+
     def test_table_page_jump_reuses_snapshot_and_reports_page_size(self):
         for size in range(1, 52):
             self.add_flow(size=size)
@@ -65,21 +77,20 @@ class ExplorerTest(TestCase):
         self.assertEqual(far["page"], 1_000_001)
         self.assertEqual(far["rows"], [])
 
-    def test_network_map_aggregates_sources_and_pages_destinations(self):
+    def test_network_map_aggregates_destinations_without_losing_bytes(self):
         for offset in range(1, 15):
             self.add_flow(dst=f"198.51.100.{offset}", size=offset)
         self.add_flow(src="203.0.113.200", dst="198.51.100.14", size=10)
+        self.add_flow(dst="198.51.101.3", size=7)
         self.add_flow(src="192.0.2.251", dst="198.51.100.200", size=1000)
         args = {"network": "203.0.113.20/24"}
-        first = server.query(self.db, args, now=NOW)
-        second = server.query(self.db, {**args, "page": "2"}, now=NOW)
-        self.assertEqual(first["target"], "203.0.113.0/24")
-        self.assertEqual(first["matches"], 14)
-        self.assertEqual(first["rows"][0]["peer"], "198.51.100.14")
-        self.assertEqual(first["rows"][0]["total"], 24)
-        self.assertEqual(first["total"], sum(range(1, 15)) + 10)
-        self.assertEqual(len(first["rows"]) + len(second["rows"]), 14)
-        self.assertFalse({row["peer"] for row in first["rows"]} & {row["peer"] for row in second["rows"]})
+        data = server.query(self.db, args, now=NOW)
+        self.assertEqual(data["target"], "203.0.113.0/24")
+        self.assertEqual(data["aggregation_prefix"], 24)
+        self.assertEqual([(r["peer"], r["total"]) for r in data["rows"]],
+                         [("198.51.100.0/24", 115), ("198.51.101.0/24", 7)])
+        self.assertEqual(data["total"], 122)
+        self.assertNotIn("page", data)
 
     def test_network_map_respects_query_filters_and_window(self):
         self.add_flow(dst="198.51.100.1", direction="down")

@@ -91,11 +91,6 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
     <article class="card map-card" aria-labelledby="map-title">
       <div class="card-head"><h2 id="map-title"></h2></div>
       <div id="map-content" aria-live="polite"></div>
-      <div class="pagination" id="map-pages" hidden>
-        <button type="button" id="map-prev" data-i18n>← Anterior</button>
-        <div id="map-page"></div>
-        <button type="button" id="map-next" data-i18n>Seguinte →</button>
-      </div>
     </article>
   </section>
   <div id="dashboard">
@@ -247,6 +242,16 @@ function status(message, error = false) {
 function requestError(error) {
   return error instanceof TypeError ? 'Não foi possível ligar ao servidor.' : error.message;
 }
+async function viewResponse(query, signal) {
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetch('/api/view?' + query, {signal});
+    const data = await response.json();
+    if (response.ok) return data;
+    if (response.status !== 429 || attempt === 6) throw Error(data.error);
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    signal.throwIfAborted();
+  }
+}
 function params(page, charts) {
   const query = new URLSearchParams({...filters, ...anchor, page, charts: charts ? '1' : '0',
     size: $('size').value, sort: $('sort').value});
@@ -261,9 +266,7 @@ async function load(page = 1, charts = true) {
   renderFlowPager();
   status('A consultar o SQLite…');
   try {
-    const response = await fetch('/api/view?' + params(page, charts), {signal:controller.signal});
-    const data = await response.json();
-    if (!response.ok) throw Error(data.error);
+    const data = await viewResponse(params(page, charts), controller.signal);
     if (controller.signal.aborted) return;
     if (page > 1 && !data.rows.length) return load(1, charts);
     anchor = {end:data.end, ceiling:data.ceiling};
@@ -296,6 +299,8 @@ function apply() {
   filters = Object.fromEntries(new FormData(form));
   anchor = {};
   current = null;
+  chartData = null;
+  $('metrics').hidden = $('patterns').hidden = true;
   $('export').disabled = true;
   $('body').innerHTML = '';
   load();
@@ -305,7 +310,9 @@ function barList(rows, key) {
   const max = Math.max(1, ...rows.map(row => row.total));
   return rows.map(row => {
     const label = t(row.key) + (row.service ? ' · ' + row.service : '');
-    return '<button type="button" data-query="' + esc(key + ':' + row.key) + '" title="' + esc(label) +
+    const action = key === 'src' || key === 'dst'
+      ? 'data-search-ip="' + esc(row.key) : 'data-query="' + esc(key + ':' + row.key);
+    return '<button type="button" ' + action + '" title="' + esc(label) +
       '"><i style="width:' + (100 * row.total / max) + '%"></i><span>' + esc(label) +
       '</span><b>' + volume(row.total) + '</b></button>';
   }).join('');
@@ -369,11 +376,15 @@ function draw(data) {
     }).join('')).join('');
 }
 
+function ipSearchButton(ip, label = ip) {
+  return `<button class="ip-link" type="button" data-search-ip="${esc(ip)}"
+    aria-label="${t('Pesquisar IP')} ${esc(ip)}">${esc(label)}</button>`;
+}
 function endpoint(ip, port) {
   if (!ip) return '—';
   const name = names.get(ip) || (names.has(ip) ? t('Sem PTR') : '');
   const label = port > 0 ? `${ip}:${port}` : ip;
-  return `<span class="endpoint">${esc(label)}<button class="ptr" type="button"
+  return `<span class="endpoint">${ipSearchButton(ip, label)}<button class="ptr" type="button"
     data-ptr="${esc(ip)}" aria-label="${t('Resolver')} ${esc(ip)}">PTR</button>
     ${name ? `<small>${esc(name)}</small>` : ''}</span>`;
 }
@@ -389,13 +400,15 @@ function table(data) {
   $('head').innerHTML = '<tr>' + titles.map(title => `<th scope="col">${t(title)}</th>`).join('') + '</tr>';
   $('body').innerHTML = data.rows.length ? data.rows.map(row => {
     const asn = n => n > 0 ? `AS${n}` : '—';
-    const lead = individual ? `<td>${stamp(row.received)}</td><td>${esc(row.router)}</td>
+    const groupLabel = individual ? '' : ['src', 'dst'].includes(filters.group) && row.key !== 'Sem dados'
+      ? ipSearchButton(row.key) : esc(t(row.key));
+    const lead = individual ? `<td>${stamp(row.received)}</td><td>${ipSearchButton(row.router)}</td>
       <td>${endpoint(row.src,row.sport)}</td><td>${endpoint(row.dst,row.dport)}</td>
       <td>${esc(t(row.proto))}${row.dport > 0 ? ' / '+esc(row.dport) : ''}${row.service ? ' · '+esc(row.service) : ''}</td>
       <td title="${esc(row.application_id || '')}">${esc(row.application_name || row.application_id || '—')}</td>
       <td>${esc(asn(row.sasn))} / ${esc(asn(row.dasn))}</td>` :
-      `<td>${esc(t(row.key))}${row.service ? ' · '+esc(row.service) : ''}</td><td>${fmt.format(row.flows)}</td>`;
-    const map = individual ? `<td><button type="button" class="map-link" data-flow-id="${row.id}"
+      `<td>${groupLabel}${row.service ? ' · '+esc(row.service) : ''}</td><td>${fmt.format(row.flows)}</td>`;
+    const map = individual ? `<td><button type="button" class="map-link" data-flow-id="${esc(row.id)}"
       data-flow-received="${row.received}">${t('Ver mapa')}</button></td>` : '';
     return `<tr>${lead}<td class="number up">${volume(row.up)}</td><td class="number down">${volume(row.down)}</td>
       <td class="number"><b>${volume(row.total)}</b></td><td class="number">${fmt.format(row.packets)}</td>${map}</tr>`;
@@ -414,18 +427,16 @@ form.onsubmit = event => { event.preventDefault(); apply(); };
 form.elements.group.onchange = () => {
   $('prefix').hidden = !['srcnet','dstnet'].includes(form.elements.group.value);
 };
-function resetDataset() {
-  chartData = null;
-  $('metrics').hidden = $('patterns').hidden = true;
-  resetFilters();
-}
-function resetFilters() {
+function resetFilters(query = '') {
   form.reset();
+  form.elements.q.value = query;
   if (dataset === 'archive') form.elements.minutes.value = '1440';
+  $('sort').value = 'total';
+  $('size').value = '25';
   $('prefix').hidden = true;
   apply();
 }
-$('clear').onclick = resetFilters;
+$('clear').onclick = () => resetFilters();
 $('refresh').onclick = refresh;
 setInterval(() => {
   if (activeView === 'live' && !loading) refresh();
@@ -437,12 +448,15 @@ $('patterns').onclick = event => {
   const button = event.target.closest('[data-query]');
   if (button) { form.elements.q.value = button.dataset.query; apply(); }
 };
+document.addEventListener('click', event => {
+  const ip = event.target.closest('[data-search-ip]')?.dataset.searchIp;
+  if (ip) showView(dataset, ip);
+});
 $('body').onclick = async event => {
   const flow = event.target.closest('[data-flow-id]');
   if (flow) {
-    const query = params(1, false);
-    query.set('flow_id', flow.dataset.flowId);
-    query.set('flow_received', flow.dataset.flowReceived);
+    const query = new URLSearchParams({flow_id: flow.dataset.flowId, flow_received: flow.dataset.flowReceived});
+    if (dataset === 'archive') query.set('archive', archive.id);
     showView('map');
     loadMap('flow', query);
     return;
@@ -518,8 +532,19 @@ async function loadArchiveCatalog() {
   }
 }
 
-function showView(view) {
+function showView(view, searchIp) {
+  const changed = activeView !== view;
   activeView = view;
+  if (changed) {
+    request?.abort();
+    request = null;
+    loading = false;
+    form.elements.q.value = '';
+    $('map-form').elements.target.value = '';
+    filters = {...filters, q: ''};
+    anchor = {};
+    clearMap();
+  }
   document.querySelectorAll('[data-view]').forEach(button => {
     if (button.dataset.view === view) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
@@ -530,7 +555,11 @@ function showView(view) {
   $('live-title').hidden = $('auto-refresh').hidden = view !== 'live';
   if (!$('dashboard').hidden && dataset !== view) {
     dataset = view;
-    resetDataset();
+    resetFilters(searchIp);
+  } else if (searchIp) {
+    resetFilters(searchIp);
+  } else if (changed && !$('dashboard').hidden) {
+    apply();
   } else if (view === 'live' && current && !loading && Date.now() / 1000 - current.end > 600) {
     refresh();
   }
@@ -575,7 +604,7 @@ async function openDay(url, contentType, body, fromVolume = false) {
     if (activeView === 'archive') {
       const alreadyShowing = dataset === 'archive';
       showView('archive');
-      if (alreadyShowing) resetDataset();
+      if (alreadyShowing) resetFilters();
     }
     clearArchiveMap();
   } catch (error) {
