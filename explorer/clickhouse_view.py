@@ -5,7 +5,7 @@ from time import time
 from urllib.parse import parse_qs, urlsplit
 import logging
 
-from collector.clickhouse import ClickHouseError, Client
+from collector.clickhouse import APPLICATION_ID, ClickHouseError, Client
 import server as panel
 
 LOG = logging.getLogger(__name__)
@@ -28,13 +28,39 @@ BASE = """
     SELECT id, received, router AS router_num, src AS src_num, dst AS dst_num,
            IPv4NumToString(router) AS router_ip, IPv4NumToString(src) AS src_ip,
            IPv4NumToString(dst) AS dst_ip, sport, dport, proto, sasn, dasn,
-           bytes, packets, sent
+           bytes, packets, sent, flow
     FROM flows
     WHERE received >= {start:UInt32} AND received < {end:UInt32} AND id <= {ceiling:UInt64}
       AND ({router:String}='' OR router={router_num:UInt32})
       AND ({direction:String}='' OR sent=({direction:String}='up'))
 """
 EXPORT_ERROR = "A exportação excede 50 000 linhas. Reduz o período ou aplica um filtro."
+
+
+def resolve_applications(client, rows):
+    pending = []
+    for row in rows:
+        domain = row.pop("application_domain", 0)
+        app_id = row.get("application_id")
+        if (row["direction"] == "up" and isinstance(app_id, str)
+                and APPLICATION_ID.fullmatch(app_id) and not app_id.startswith("00")
+                and isinstance(domain, int) and 0 <= domain < 2**32):
+            pending.append((row, (int(IPv4Address(row["router"])), domain, app_id)))
+        else:
+            row["application_id"] = None
+    if not pending:
+        return
+    routers = sorted({key[0] for _, key in pending})
+    names = {
+        (entry["router"], entry["domain"], entry["application_id"]): entry["application_name"]
+        for entry in client.rows("""
+            SELECT router, domain, application_id, argMax(name, seen_at) AS application_name
+            FROM application_names WHERE router IN {routers:Array(UInt32)}
+            GROUP BY router, domain, application_id
+        """, {"routers": str(routers)})
+    }
+    for row, key in pending:
+        row["application_name"] = names.get(key)
 
 
 def filtered(params):
@@ -101,7 +127,9 @@ def observation(client, args, params):
         raise ValueError(error)
     row = rows[0]
     row["router"] = row.pop("router_ip")
-    return panel.observation_from_row(row)
+    result = panel.observation_from_row(row)
+    resolve_applications(client, [result])
+    return result
 
 
 def service_label(row):
@@ -172,7 +200,7 @@ def query(client, args, committed_id, routers, export=False, now=None):
         table = """SELECT toString(id) AS flow_id, received, router_ip AS router, src_ip AS src,
                    dst_ip AS dst, sport, dport, proto, nullIf(sasn,0) AS sasn,
                    nullIf(dasn,0) AS dasn, packets, if(sent=1,'up','down') AS direction,
-                   if(sent=1,bytes,0) AS up, if(sent=0,bytes,0) AS down, bytes AS total
+                   if(sent=1,bytes,0) AS up, if(sent=0,bytes,0) AS down, bytes AS total, flow
                    FROM filtered"""
         tie = "received DESC, id DESC"
     else:
@@ -183,10 +211,21 @@ def query(client, args, committed_id, routers, export=False, now=None):
                     GROUP BY key)"""
         tie = "key"
 
-    sql = base + table + f" ORDER BY {panel.SORTS[sort]}, {tie} LIMIT {{limit:UInt64}} OFFSET {{offset:UInt64}}"
+    table += f" ORDER BY {panel.SORTS[sort]}, {tie} LIMIT {{limit:UInt64}} OFFSET {{offset:UInt64}}"
+    if group == "flow":
+        table = f"""
+            SELECT * EXCEPT (flow),
+                   if(direction='up', JSONExtractString(flow, 'application_id'), '') AS application_id,
+                   JSONExtractUInt(flow, 'observation_domain_id') AS application_domain
+            FROM ({table})
+            ORDER BY {panel.SORTS[sort]}, received DESC, toUInt64(flow_id) DESC
+        """
+    sql = base + table
     rows = list(client.rows(sql, params))
     if export and len(rows) > panel.EXPORT_LIMIT:
         raise ValueError(EXPORT_ERROR)
+    if group == "flow":
+        resolve_applications(client, rows)
     for row in rows:
         if group == "flow":
             row["id"] = row.pop("flow_id")

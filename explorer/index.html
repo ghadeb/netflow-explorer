@@ -384,7 +384,7 @@ function table(data) {
     (data.matches === 1 ? 'grupo' : 'grupos');
   $('count').textContent = fmt.format(data.matches) + ' ' + t(unit);
   const titles = individual ?
-    ['Recepção UTC','Router','Origem','Destino','Protocolo / serviço','ASN origem / destino','Enviado','Recebido','Total','Pacotes','Mapa'] :
+    ['Recepção UTC','Router','Origem','Destino','Protocolo / serviço','Aplicação','ASN origem / destino','Enviado','Recebido','Total','Pacotes','Mapa'] :
     ['Grupo','Registos','Enviado','Recebido','Total','Pacotes'];
   $('head').innerHTML = '<tr>' + titles.map(title => `<th scope="col">${t(title)}</th>`).join('') + '</tr>';
   $('body').innerHTML = data.rows.length ? data.rows.map(row => {
@@ -392,6 +392,7 @@ function table(data) {
     const lead = individual ? `<td>${stamp(row.received)}</td><td>${esc(row.router)}</td>
       <td>${endpoint(row.src,row.sport)}</td><td>${endpoint(row.dst,row.dport)}</td>
       <td>${esc(t(row.proto))}${row.dport > 0 ? ' / '+esc(row.dport) : ''}${row.service ? ' · '+esc(row.service) : ''}</td>
+      <td title="${esc(row.application_id || '')}">${esc(row.application_name || row.application_id || '—')}</td>
       <td>${esc(asn(row.sasn))} / ${esc(asn(row.dasn))}</td>` :
       `<td>${esc(t(row.key))}${row.service ? ' · '+esc(row.service) : ''}</td><td>${fmt.format(row.flows)}</td>`;
     const map = individual ? `<td><button type="button" class="map-link" data-flow-id="${row.id}"

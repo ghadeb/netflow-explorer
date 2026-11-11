@@ -15,15 +15,28 @@ from urllib.request import urlopen
 from collector.storage import connect
 
 
-def packet(sequence, source, destination, port, size):
+def packet(sequence, source, destination, port, size, *, app_id=b"", domain=1):
     fields = [(8, 4), (12, 4), (4, 1), (7, 2), (11, 2), (1, 8), (2, 8)]
+    if app_id:
+        fields.append((95, len(app_id)))
     template = struct.pack("!HHHH", 0, 8 + 4 * len(fields), 256, len(fields))
     template += b"".join(struct.pack("!HH", *field) for field in fields)
     record = struct.pack("!4s4sBHHQQ", IPv4Address(source).packed, IPv4Address(destination).packed,
                          6, 45000, port, size, 1)
+    record += app_id
     record += bytes((-len(record)) % 4)
     data = struct.pack("!HH", 256, len(record) + 4) + record
-    return struct.pack("!HHIIII", 9, 2, 60000, int(time()), sequence, 1) + template + data
+    return struct.pack("!HHIIII", 9, 2, 60000, int(time()), sequence, domain) + template + data
+
+
+def application_table(sequence, app_id, name, *, domain=1):
+    options = struct.pack("!HHHHHHHHH", 257, 4, 8, 1, 4, 95, len(app_id), 96, 24)
+    options += bytes((-len(options)) % 4)
+    record = bytes(4) + app_id + name.encode().ljust(24, b"\0")
+    record += bytes((-len(record)) % 4)
+    return (struct.pack("!HHIIII", 9, 2, 60000, int(time()), sequence, domain)
+            + struct.pack("!HH", 1, len(options) + 4) + options
+            + struct.pack("!HH", 257, len(record) + 4) + record)
 
 
 def main():

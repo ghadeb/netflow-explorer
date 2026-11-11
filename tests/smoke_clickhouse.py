@@ -9,7 +9,7 @@ import ssl
 import sys
 
 sys.path[:0] = ["/painel", "/tmp"]
-from smoke_udp import packet
+from smoke_udp import application_table, packet
 import socket
 
 from collector.clickhouse import Client, DAY, Writer, encode_batch
@@ -56,6 +56,37 @@ def synthetic(day, size):
     return ("up", raw)
 
 
+def test_nbar():
+    app_id = bytes.fromhex("0d00002a")
+    args = {"q": "src:203.0.113.55", "charts": 0}
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+        for port in (2055, 2056):
+            udp.sendto(packet(2, "203.0.113.55", "198.51.100.9", 443, 7000,
+                              app_id=app_id, domain=19), ("127.0.0.1", port))
+        deadline = monotonic() + 10
+        while monotonic() < deadline:
+            result = view(**args)
+            if len(result["rows"]) == 2:
+                break
+            sleep(0.3)
+        rows = {row["direction"]: row for row in result["rows"]}
+        assert rows["up"]["application_id"] == app_id.hex(), rows
+        assert rows["up"]["application_name"] is None, rows
+        assert rows["down"]["application_id"] is None, rows
+
+        udp.sendto(application_table(3, app_id, "different-domain", domain=20), ("127.0.0.1", 2055))
+        udp.sendto(application_table(4, app_id, "test-app", domain=19), ("127.0.0.1", 2055))
+        deadline = monotonic() + 10
+        while monotonic() < deadline:
+            rows = {row["direction"]: row for row in view(**args)["rows"]}
+            if rows["up"]["application_name"] == "test-app":
+                break
+            sleep(0.3)
+        assert rows["up"]["application_name"] == "test-app", rows
+        assert rows["down"]["application_id"] is None, rows
+        assert b"test-app" in api("api/export", {"q": args["q"]})
+
+
 def main():
     data = wait_for_flows()
     assert data["charts"]["port"], data
@@ -73,6 +104,7 @@ def main():
     assert view(**scope, network="203.0.113.25", charts=0)["rows"][0]["to_host"] > 0
     assert view(**scope, network="203.0.113.0/24", charts=0)["rows"][0]["peer"] == "198.51.100.9"
     assert b"https" in api("api/export", {**scope, "direction": "up"})
+    test_nbar()
 
     now = int(time())
     old = (now // DAY - 35) * DAY

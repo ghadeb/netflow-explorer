@@ -4,6 +4,7 @@ from fcntl import LOCK_EX, flock
 from http.client import HTTPException
 from ipaddress import IPv4Address
 from pathlib import Path
+import re
 from struct import Struct
 from time import time_ns
 from urllib.error import HTTPError
@@ -43,6 +44,19 @@ PARTITION BY intDiv(received, 86400)
 ORDER BY (received, router, id)
 SETTINGS non_replicated_deduplication_window = 256
 """
+APPLICATION_OPTIONS = """
+CREATE TABLE IF NOT EXISTS application_names (
+    router UInt32,
+    domain UInt32,
+    application_id String,
+    name String,
+    seen_at UInt64
+)
+ENGINE = ReplacingMergeTree(seen_at)
+ORDER BY (router, domain, application_id)
+"""
+APPLICATION_ID = re.compile(r"(?:[0-9a-f]{2}){2,16}")
+APPLICATION_CACHE_LIMIT = 32768
 
 
 class ClickHouseError(RuntimeError):
@@ -123,12 +137,36 @@ def unsigned(value, bits):
     return value if 0 <= value < 2**bits else 0
 
 
-def encode_batch(events, allowed, first_id):
+def add_application_option(raw, allowed, applications):
+    try:
+        option = json.loads(raw)
+        if option["type"] != "NETFLOW_V9_APPLICATION" or option["sampler_address"] not in allowed:
+            return
+        application_id = option["application_id"]
+        if not APPLICATION_ID.fullmatch(application_id) or application_id.startswith("00"):
+            return
+        name = option["application_name"].strip()
+        if not 0 < len(name.encode()) <= 255 or not name.isprintable():
+            return
+        seen_at = int(option["time_received_ns"])
+        domain = int(option["observation_domain_id"])
+        if not 0 < seen_at < 2**64 or not 0 <= domain < 2**32:
+            return
+        key = (int(IPv4Address(option["sampler_address"])), domain, application_id)
+    except (KeyError, ValueError, TypeError, AttributeError, OverflowError):
+        return
+    if key not in applications or seen_at >= applications[key][1]:
+        applications[key] = (name, seen_at)
+
+
+def encode_batch(events, allowed, first_id, applications=None):
     data = bytearray()
     count = 0
     for direction, raw in events:
         parsed = parse_event(direction, raw, allowed)
         if parsed is None:
+            if direction == "up" and applications is not None:
+                add_application_option(raw, allowed, applications)
             continue
         row, flow = parsed
         received, router, _, _, size, packets, _, src, _, _ = row
@@ -151,6 +189,7 @@ class Writer:
         self.client = Client(timeout=8)
         startup = Client(timeout=60)
         startup.execute(DDL)
+        startup.execute(APPLICATION_OPTIONS)
         codec = next(startup.rows("""
             SELECT compression_codec FROM system.columns
             WHERE database='netflow' AND table='flows' AND name='flow'
@@ -159,32 +198,56 @@ class Writer:
             startup.execute("ALTER TABLE flows MODIFY COLUMN flow CODEC(ZSTD(1))")
         self.committed_id = next(startup.rows("SELECT max(id) AS last FROM flows", streaming=True))["last"]
         self.next_id = max(time_ns(), self.committed_id + 1)
+        self.application_cache = {}
 
     def close(self):
         pass
 
     def ingest(self, events, allowed, stopped):
         first = self.next_id
-        payload, count = encode_batch(events, allowed, first)
-        if not count:
+        applications = {}
+        payload, count = encode_batch(events, allowed, first, applications)
+        if not count and not applications:
             return 0
         with ingest_lock():
-            delay = 0.5
-            while True:
-                try:
-                    self.client.execute(
-                        "INSERT INTO flows FORMAT RowBinary",
-                        settings={"insert_deduplication_token": str(first), "async_insert": 0},
-                        data=payload,
-                    )
-                    break
-                except ClickHouseError as exc:
-                    if not exc.retryable or stopped.is_set():
-                        raise
-                    LOG.warning("ClickHouse batch of %d pending, retry in %.1fs: %s", count, delay, exc)
-                    if stopped.wait(delay):
-                        raise
-                    delay = min(delay * 2, 5)
-        self.next_id += count
-        self.committed_id = self.next_id - 1
+            self.store_applications(applications, stopped)
+            if count:
+                self.insert("INSERT INTO flows FORMAT RowBinary", payload, stopped,
+                            insert_deduplication_token=str(first))
+        if count:
+            self.next_id += count
+            self.committed_id = self.next_id - 1
         return count
+
+    def store_applications(self, applications, stopped):
+        updates = {}
+        for key, (name, seen_at) in applications.items():
+            previous = self.application_cache.get(key)
+            if previous is None or seen_at >= previous[1]:
+                updates[key] = (name, seen_at)
+        changed = [
+            {"router": router, "domain": domain, "application_id": app_id,
+             "name": name, "seen_at": seen_at}
+            for (router, domain, app_id), (name, seen_at) in updates.items()
+            if self.application_cache.get((router, domain, app_id), (None, 0))[0] != name
+        ]
+        if changed:
+            payload = "\n".join(json.dumps(row) for row in changed).encode()
+            self.insert("INSERT INTO application_names FORMAT JSONEachRow", payload, stopped)
+        if len(self.application_cache) + len(updates) > APPLICATION_CACHE_LIMIT:
+            self.application_cache.clear()
+        self.application_cache.update(updates)
+
+    def insert(self, sql, payload, stopped, **settings):
+        delay = 0.5
+        while True:
+            try:
+                self.client.execute(sql, settings={"async_insert": 0, **settings}, data=payload)
+                return
+            except ClickHouseError as exc:
+                if not exc.retryable or stopped.is_set():
+                    raise
+                LOG.warning("ClickHouse insert pending, retry in %.1fs: %s", delay, exc)
+                if stopped.wait(delay):
+                    raise
+                delay = min(delay * 2, 5)

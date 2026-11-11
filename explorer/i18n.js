@@ -82,6 +82,7 @@ const FluxoI18n = (() => {
     'Origem': 'Source',
     'Destino': 'Destination',
     'Protocolo / serviço': 'Protocol / service',
+    'Aplicação': 'Application',
     'ASN origem / destino': 'Source / destination ASN',
     'Pacotes': 'Packets',
     'Grupo': 'Group',

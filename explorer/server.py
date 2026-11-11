@@ -109,6 +109,9 @@ def observation_from_row(row):
     observation["bgp_next_hop"] = reported_hop(raw.get("bgp_next_hop"))
     observation["proto"] = protocol(raw.get("proto"))
     observation["service"] = service(observation["proto"], observation["dport"])
+    if observation["direction"] == "up" and raw.get("application_id"):
+        observation["application_id"] = raw["application_id"]
+        observation["application_domain"] = raw.get("observation_domain_id", 0)
     return observation
 
 
@@ -211,7 +214,8 @@ def query(db, args, export=False, now=None):
             CAST(json_extract(flow,'$.dst_port') AS INTEGER) AS dport,
             proto_name(json_extract(flow,'$.proto')) AS proto,
             nullif(CAST(json_extract(flow,'$.src_as') AS INTEGER),0) AS sasn,
-            nullif(CAST(json_extract(flow,'$.dst_as') AS INTEGER),0) AS dasn
+            nullif(CAST(json_extract(flow,'$.dst_as') AS INTEGER),0) AS dasn,
+            CASE WHEN direction='up' THEN json_extract(flow,'$.application_id') END AS application_id
         FROM records
         WHERE received>=:start AND received<:end AND rowid<=:ceiling
           AND (:router='' OR router=:router) AND (:direction='' OR direction=:direction)
@@ -229,6 +233,7 @@ def query(db, args, export=False, now=None):
 
     if group == "flow":
         table = """SELECT id,received,router,src,dst,sport,dport,proto,sasn,dasn,packets,direction,
+                   application_id,
                    CASE WHEN direction='up' THEN bytes ELSE 0 END AS up,
                    CASE WHEN direction='down' THEN bytes ELSE 0 END AS down,
                    bytes AS total FROM filtered"""
@@ -297,7 +302,7 @@ def query(db, args, export=False, now=None):
 def csv_bytes(rows, group):
     fields = (
         ["received_utc","router","direction","src","dst","sport","dport","proto",
-         "service","sasn","dasn","up","down","total","packets"]
+         "service","application_id","application_name","sasn","dasn","up","down","total","packets"]
         if group == "flow" else
         ["key","service","up","down","total","packets","flows","received_utc"]
     )

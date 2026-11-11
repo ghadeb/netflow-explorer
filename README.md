@@ -63,6 +63,8 @@ Use a **Linux AMD64** server with x86-64-v3 CPU support, Docker Engine, the Comp
 4. Open `https://<dashboard-address>:8001`. The default dashboard has HTTPS without login and is intended for a trusted private network.
 5. Send NetFlow v9 data and templates from the allowed exporters. This deployment labels records received on **UDP 2055** as sent and those on **UDP 2056** as received, relative to the monitored network. Use a single exporter filter if two devices observe the same traffic. [Exporter setup and verification](docs/operations.md#configure-an-exporter)
 
+For Cisco NBAR, send the application ID in the UDP 2055 flow records and enable `option application-table` on that exporter. The ClickHouse dashboard resolves the ID to a name when the options table arrives. Individual flows and CSV show the name when available, and daily archives retain the ID in the original flow payload. [Cisco application table option](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/command/fnf-cr-book/fnf-m1.html)
+
 If you are upgrading from the SQLite deployment, follow the [one-time cutover and rollback guide](docs/clickhouse-pilot.md).
 
 ## Storage and retention

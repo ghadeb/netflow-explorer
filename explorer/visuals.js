@@ -161,6 +161,7 @@ function renderFlowMap(flow) {
     ['Sentido', t(flow.direction === 'up' ? 'Enviado' : 'Recebido')],
     ['Recepção UTC', stamp(flow.received)],
   ];
+  if (flow.application_id) details.push(['Aplicação', esc(flow.application_name || flow.application_id)]);
   if (flow.started > 0) details.push(['Início UTC', stamp(flow.started / 1e9)]);
   if (flow.ended > 0) details.push(['Fim UTC', stamp(flow.ended / 1e9)]);
   if (flow.next_hop) details.push(['Próximo salto exportado', esc(flow.next_hop)]);
