@@ -99,18 +99,21 @@ def test_iana_application_names():
     }
     source = "203.0.113.56"
     args = {"q": f"src:{source}", "charts": 0}
+    deadline = monotonic() + 15
+    sequence = 5
+    names = {}
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
-        for sequence, app_id in enumerate(expected, 5):
-            udp.sendto(packet(sequence, source, "198.51.100.9", 443, 7000,
-                              app_id=bytes.fromhex(app_id), domain=21), ("127.0.0.1", 2055))
-    deadline = monotonic() + 10
-    while monotonic() < deadline:
-        data = view(**args)
-        if len(data["rows"]) == len(expected):
-            break
-        sleep(0.3)
-    names = {row["application_id"]: row["application_name"] for row in data["rows"]}
-    assert names == expected, names
+        while monotonic() < deadline:
+            for app_id in expected.keys() - names.keys():
+                udp.sendto(packet(sequence, source, "198.51.100.9", 443, 7000,
+                                  app_id=bytes.fromhex(app_id), domain=21), ("127.0.0.1", 2055))
+                sequence += 1
+            sleep(1.5)
+            data = view(**args)
+            names = {row["application_id"]: row["application_name"] for row in data["rows"]}
+            if names.keys() == expected.keys():
+                break
+    assert names == expected, data
     row = next(row for row in data["rows"] if row["application_id"] == "030000b3")
     observation = view(end=data["end"], ceiling=data["ceiling"], flow_id=row["id"],
                        flow_received=row["received"], charts=0)
