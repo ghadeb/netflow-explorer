@@ -81,42 +81,26 @@ function renderActivityPeak(data) {
     '<p class="hint">' + t('Intervalo pela hora de recepção dos registos.') + '</p>';
 }
 
-function renderServices(rows, total) {
+function renderServices(rows) {
   if (!rows.length) {
     $('port').innerHTML = empty();
     return;
   }
-  const peak = Math.max(1, rows[0].total);
-  const share = value => fmt.format(total > 0 ? value * 100 / total : 0) + '%';
-  const featured = rows.reduce((sum, row) => sum + row.total, 0);
-  const rest = Math.max(0, total - featured);
-  const segments = rows.map((row, i) => {
-    const label = [row.key, row.service].filter(Boolean).join(' · ');
-    return '<span style="--segment:' + colors[i] + ';flex-grow:' + row.total +
-      '" title="' + esc(label) + ' · ' + share(row.total) + '"></span>';
-  });
-  if (rest) segments.push('<span class="remainder" style="flex-grow:' + rest +
-    '" title="' + t('Restante tráfego') + ' · ' + share(rest) + '"></span>');
-  const details = rows.map((row, i) => {
-    const breakdown = t('Enviado') + ' ' + volume(row.up) + ' · ' +
-      t('Recebido') + ' ' + volume(row.down);
+  const peak = Math.max(1, rows[0].flows);
+  const details = rows.map(row => {
+    const breakdown = t('Enviado') + ' ' + fmt.format(row.up_flows) + ' · ' +
+      t('Recebido') + ' ' + fmt.format(row.down_flows);
     return '<button class="service-row" type="button" data-query="port:' + esc(row.key) + '">' +
-      '<span class="service-name"><i style="--segment:' + colors[i] + '"></i>' +
-      '<span><b>' + esc(row.service || row.key) + '</b>' +
-      (row.service ? '<small>' + esc(row.key) + '</small>' : '') + '</span></span>' +
+      '<span class="service-name"><b>' + esc(row.service || row.key) + '</b>' +
+      (row.service ? '<small>' + esc(row.key) + '</small>' : '') + '</span>' +
       '<span class="service-volume"><span class="service-bars" aria-hidden="true">' +
-      '<i class="sent" style="width:' + (100 * row.up / peak) + '%"></i>' +
-      '<i class="received" style="width:' + (100 * row.down / peak) + '%"></i></span>' +
+      '<i class="sent" style="width:' + (100 * row.up_flows / peak) + '%"></i>' +
+      '<i class="received" style="width:' + (100 * row.down_flows / peak) + '%"></i></span>' +
       '<small>' + breakdown + '</small></span>' +
-      '<span class="service-total"><b>' + volume(row.total) + '</b>' +
-      '<small>' + share(row.total) + '</small></span></button>';
+      '<span class="service-total"><b>' + fmt.format(row.flows) + '</b>' +
+      '<small>' + volume(row.total) + '</small></span></button>';
   }).join('');
-  $('port').innerHTML = '<div class="service-share"><span>' +
-    t('Quota do volume total') + '</span><b>' + share(featured) + '</b></div>' +
-    '<div class="service-segments" aria-hidden="true">' + segments.join('') + '</div>' +
-    '<div class="service-share"><small>' + t('Portos apresentados') + ' · ' +
-    volume(featured) + '</small><small>' + t('Restante tráfego') + ' · ' + volume(rest) +
-    '</small></div><div class="service-list">' + details + '</div>';
+  $('port').innerHTML = '<div class="service-list">' + details + '</div>';
 }
 
 let mapState, mapRequest;

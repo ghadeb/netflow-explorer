@@ -11,9 +11,9 @@ NetFlow Explorer collects flow records from your network exporters, stores them 
 ## Highlights
 
 - **Interactive weathermaps** for individual flows, the peers of an IPv4 host, or the destinations reached from a source subnet.
-- **Traffic analytics** with top talkers, port and service mix, a UTC activity heatmap, peak intervals, and separate sent and received totals.
+- **Traffic analytics** with top talkers, the 20 busiest destination ports by record count, identified services, a UTC activity heatmap, and separate sent and received totals.
 - **Flow explorer** with search, aggregation by host, conversation, subnet, port or ASN, and an editable page selector. View source and destination endpoints, packet and byte counts, and exported BGP ASNs. Resolve reverse DNS on demand and export filtered results to CSV.
-- **Cisco NBAR labels** on live UP flows, individual weathermaps and CSV when the exporter supplies the application ID and name table.
+- **Cisco NBAR labels** on live flows in both directions, individual weathermaps and CSV when the exporter supplies the application ID and name table.
 - **Daily archive browser** with 30 days of live ClickHouse queries by default. Select a verified daily `.sqlite3.xz` from the server or upload one. Historical queries run against a separate read-only copy.
 - **Direct HTTPS dashboard** with English and Portuguese, automatic refresh every ten minutes in Live, and a manual refresh control.
 
@@ -23,9 +23,9 @@ NetFlow Explorer collects flow records from your network exporters, stores them 
 | --- | --- |
 | **View map** on an individual flow | Source and destination endpoints, the observation point, and interfaces and next-hop information when the exporter supplies them. Dashed links mark gaps in NetFlow visibility. |
 | An **IPv4 host** | Its observed peers, ranked by volume, with bytes shown in both directions. |
-| A **source CIDR** such as `192.0.2.0/24` | Traffic from that subnet to each observed destination. Link thickness represents volume and destinations are paginated. |
+| A **source CIDR** such as `192.0.2.0/24` | Traffic from that subnet to its destinations. Link thickness represents volume. |
 
-Maps use the active dashboard filters and work with both live data and daily archives.
+Host and subnet maps use the active dashboard filters and aggregate destinations into CIDR ranges when there are more than 12 IPs. Both live data and daily archives support maps. Click an individual IP to search for it with the default filters.
 
 ## Software stack
 

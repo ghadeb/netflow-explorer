@@ -1,5 +1,6 @@
 from contextlib import closing
 from datetime import UTC, datetime
+from heapq import nsmallest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import IPv4Address, IPv4Network, ip_address
 from pathlib import Path
@@ -60,6 +61,26 @@ def protocol(value):
 
 def service(proto, port):
     return SERVICES.get(f"{str(proto).lower()}/{port}", "")
+
+
+def port_charts(rows):
+    services = {}
+
+    def ports():
+        for item in rows:
+            row = dict(item)
+            proto, port = row.pop("proto"), row.pop("dport")
+            row["key"] = f"{proto}/{port}"
+            row["service"] = name = service(proto, port)
+            if name:
+                summary = services.setdefault(name, {"key": name, "flows": 0, "total": 0})
+                summary["flows"] += row["flows"]
+                summary["total"] += row["total"]
+            yield row
+
+    rank = lambda row: (-row["flows"], -row["total"], row["key"])
+    return {"port": nsmallest(20, ports(), key=rank),
+            "service": nsmallest(8, services.values(), key=rank)}
 
 
 def subnet(ip, prefix):
@@ -219,6 +240,9 @@ def query(db, args, export=False, now=None):
     if sep and field in filters:
         params["q"] = value.strip()
         match = f"lower(CAST(({filters[field]}) AS TEXT)) = :q"
+    elif sep and field == "service":
+        params["q"] = value.strip()
+        match = "(:q<>'' AND lower(service_name(proto,dport))=:q)"
     elif ipv4_number(q) is not None:
         match = "(:q=src OR :q=dst OR :q=router)"
     elif q:
@@ -278,7 +302,7 @@ def query(db, args, export=False, now=None):
             row["service"] = service(proto, port)
 
     result = {
-        "rows": rows, "totals": totals, "end": end, "ceiling": ceiling, "page": page, "size": size,
+        "rows": rows, "totals": totals, "end": end, "ceiling": str(ceiling), "page": page, "size": size,
         "matches": totals["flows"] if group == "flow" else (rows[0]["groups"] if rows else 0),
         "routers": [r[0] for r in db.execute("SELECT address FROM routers ORDER BY address")],
     }
@@ -298,15 +322,17 @@ def query(db, args, export=False, now=None):
               FROM filtered WHERE ({expr}) IS NOT NULL
               GROUP BY 2 ORDER BY total DESC, key LIMIT 8
             )"""
-        for name, expr in CHARTS.items()
+        for name, expr in CHARTS.items() if name != "port"
     )
-    charts = {name: [] for name in CHARTS}
+    charts = {name: [] for name in CHARTS if name != "port"}
     for row in db.execute(base + chart_sql, params):
-        item = dict(row)
-        if item["chart"] == "port":
-            proto, port = item["key"].split("/", 1)
-            item["service"] = service(proto, port)
-        charts[item["chart"]].append(item)
+        charts[row["chart"]].append(dict(row))
+    charts.update(port_charts(db.execute(base + f"""
+        SELECT proto, dport, {TOTALS},
+               count(CASE WHEN direction='up' THEN 1 END) AS up_flows,
+               count(CASE WHEN direction='down' THEN 1 END) AS down_flows
+        FROM filtered WHERE dport>0 GROUP BY proto, dport
+    """, params)))
 
     heat = {
         row["slot"]: row["total"]

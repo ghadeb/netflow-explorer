@@ -26,8 +26,8 @@ class ExplorerTest(TestCase):
         """)
 
     def add_flow(self, src="203.0.113.15", dst="198.51.100.1", size=400,
-                 direction="up", **fields):
-        data = dict(src_addr=src, dst_addr=dst, src_port=45000, dst_port=443,
+                 direction="up", dport=443, **fields):
+        data = dict(src_addr=src, dst_addr=dst, src_port=45000, dst_port=dport,
                     proto="TCP", **fields)
         with self.db:
             return self.db.execute("INSERT INTO records VALUES (?,?,?,?,?,?,?)",
@@ -60,6 +60,20 @@ class ExplorerTest(TestCase):
         self.add_flow(src="203.0.113.10")
         data = server.query(self.db, {"q": "203.0.113.1"}, now=NOW)
         self.assertEqual(data["matches"], 2)
+
+    def test_top_ports_use_record_count_and_service_filter(self):
+        self.add_flow(dport=443, size=1_000_000)
+        self.add_flow(dport=53, direction="up")
+        self.add_flow(dport=53, direction="down")
+        for port in range(50_000, 50_020):
+            self.add_flow(dport=port)
+        data = server.query(self.db, {}, now=NOW)
+        ports = data["charts"]["port"]
+        self.assertEqual(len(ports), 20)
+        self.assertEqual((ports[0]["key"], ports[0]["up_flows"], ports[0]["down_flows"]),
+                         ("TCP/53", 1, 1))
+        self.assertEqual(data["charts"]["service"][0]["key"], "domain")
+        self.assertEqual(server.query(self.db, {"q": "service:domain"}, now=NOW)["matches"], 2)
 
     def test_table_page_jump_reuses_snapshot_and_reports_page_size(self):
         for size in range(1, 52):

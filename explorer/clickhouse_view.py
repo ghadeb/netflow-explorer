@@ -103,6 +103,12 @@ def search_predicate(params):
     if sep and field in aliases:
         params["q"] = value.strip()
         predicate = f"lowerUTF8(toString({aliases[field]})) = {{q:String}}"
+    elif sep and field == "service":
+        ports = [key for key, label in panel.SERVICES.items() if label.lower() == value.strip()]
+        if not ports:
+            return "0"
+        params["service_ports"] = str(ports)
+        predicate = f"lower({PORT}) IN {{service_ports:Array(String)}}"
     elif (address := panel.ipv4_number(params["q"])) is not None:
         params["search_ip"] = address
         predicate = "(src_num={search_ip:UInt32} OR dst_num={search_ip:UInt32} OR router_num={search_ip:UInt32})"
@@ -255,6 +261,8 @@ def chart_data(client, base, params):
     # not retain their aggregate tables at the same time.
     charts = {}
     for name, expression in CHARTS.items():
+        if name == "port":
+            continue
         group, key = RANKING_KEYS.get(name, ("key", expression))
         ranking = base + f"""
             SELECT {key} AS key, {TOTALS}
@@ -262,8 +270,11 @@ def chart_data(client, base, params):
             ORDER BY total DESC, key LIMIT 8
         """
         charts[name] = list(client.rows(ranking, params, settings=QUERY_SETTINGS))
-    for row in charts["port"]:
-        service_label(row)
+    charts.update(panel.port_charts(client.rows(base + f"""
+        SELECT proto, dport, {TOTALS},
+               countIf(sent=1) AS up_flows, countIf(sent=0) AS down_flows
+        FROM filtered WHERE dport>0 GROUP BY proto, dport
+    """, params, settings=QUERY_SETTINGS)))
     return {"totals": totals, "series": list(bins.values()), "charts": charts, "heat": heat}
 
 

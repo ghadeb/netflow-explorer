@@ -177,6 +177,9 @@ def test_many_distinct_pairs():
     assert [row["total"] for row in pairs] == list(range(count, count - 8, -1))
     assert pairs[0]["key"] == f"{IPv4Address(3405774848 + count - 1)} → {IPv4Address(3325256704 + count - 1)}"
     assert data["charts"]["port"][0]["service"] == "https"
+    assert data["charts"]["port"][0]["flows"] == count
+    assert data["charts"]["port"][0]["up_flows"] == count // 2
+    assert data["charts"]["service"][0]["key"] == "https"
     assert data["rows"][0]["application_name"] == "ICMP", data["rows"][0]
     assert data["rows"][1]["application_id"] is None, data["rows"][1]
     for group in ("flow", "pair"):
@@ -201,6 +204,7 @@ def main():
     scope = {key: data[key] for key in ("end", "ceiling")}
     assert view(**scope, q="https", group="srcnet", charts=0)["matches"] == 1
     assert view(**scope, q="port:TCP/443", group="port", charts=0)["rows"][0]["service"] == "https"
+    assert view(**scope, q="service:https", charts=0)["matches"] == 1
     assert view(**scope, router="127.0.0.1", direction="up", charts=0)["totals"]["down"] == 0
     row = next(row for row in data["rows"] if row["direction"] == "up")
     assert isinstance(row["id"], str)

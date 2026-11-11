@@ -34,8 +34,7 @@ button:disabled{opacity:.45;cursor:default}:focus-visible{outline:2px solid var(
 .tip{min-height:20px;color:var(--muted);font-size:12px;margin-top:5px}.rank{display:grid;gap:6px}
 .rank button{position:relative;overflow:hidden;display:flex;gap:8px;justify-content:space-between;text-align:left;width:100%;border:0;background:#0b1726;font-size:13px}
 .rank button span{position:relative;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rank i{position:absolute;inset:0 auto 0 0;background:#294967}
-.rank b{position:relative;white-space:nowrap}.mix{display:grid;grid-template-columns:86px 1fr;align-items:center;gap:12px}
-.ring{width:86px;aspect-ratio:1;border-radius:50%;display:grid;place-items:center}.ring::after{content:'';background:var(--panel);width:62%;aspect-ratio:1;border-radius:50%}
+.rank b{position:relative;white-space:nowrap}
 .heat-scroll,.table-scroll{overflow:auto}.heat{display:grid;grid-template-columns:36px repeat(24,minmax(15px,1fr));gap:3px;min-width:465px;font-size:10px;color:var(--muted);align-items:center}
 .heat i{height:15px;border-radius:3px;background:#183049}.heat span{text-align:center}
 #flows{margin-top:14px}.table-head{flex-wrap:wrap;margin-bottom:10px}
@@ -44,7 +43,7 @@ th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left}th{co
 td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoint small{display:block;font-family:system-ui,sans-serif}
 .ptr{padding:2px 4px;font-size:10px;margin-left:5px;color:var(--accent)}.pagination{padding-top:12px;flex-wrap:wrap}
 .empty{color:var(--muted);padding:12px 0}.hint{color:var(--muted);font-size:12px;margin-top:8px}
-@media(max-width:950px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.mix{grid-template-columns:70px 1fr}.ring{width:70px}}
+@media(max-width:950px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:640px){.wrap{width:calc(100% - 24px)}.grid,.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.card{grid-column:1/-1}.metric{padding:10px}.chart svg{height:145px}}
 </style>
 <link rel="stylesheet" href="/visuals.css">
@@ -123,13 +122,15 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
   <div class="metrics" id="metrics"></div>
   <section class="grid" id="patterns">
     <article class="card wide"><div class="card-head"><h3 data-i18n>Volume ao longo do tempo</h3><div class="legend"><span class="up" data-i18n>● Enviado</span><span class="down" data-i18n>● Recebido</span></div></div><div id="timeline" class="chart"></div></article>
-    <article class="card"><div class="card-head"><h3 data-i18n>Protocolos</h3></div><div id="proto"></div></article>
-    <article class="card"><div class="card-head"><h3 data-i18n>Top origens</h3></div><div id="src" class="rank"></div></article>
-    <article class="card"><div class="card-head"><h3 data-i18n>Top destinos</h3></div><div id="dst" class="rank"></div></article>
     <article class="card peak-card"><div class="card-head"><h3 data-i18n>Pico de actividade</h3></div><div id="activity-peak"></div></article>
-    <article class="card full service-card"><div class="card-head"><h3 data-i18n>Portos e serviços de destino</h3><small data-i18n>Selecciona um serviço para filtrar o painel</small></div><div id="port"></div></article>
-    <article class="card wide"><div class="card-head"><h3 data-i18n>Conversas · origem → destino</h3></div><div id="pair" class="rank"></div></article>
+    <div class="chart-pair full">
+      <article class="card"><div class="card-head"><h3 data-i18n>Top origens</h3></div><div id="src" class="rank"></div></article>
+      <article class="card"><div class="card-head"><h3 data-i18n>Top destinos</h3></div><div id="dst" class="rank"></div></article>
+    </div>
+    <article class="card full service-card"><div class="card-head"><h3 data-i18n>Top 20 portos e serviços</h3><small data-i18n>Por número de registos</small></div><div id="port"></div></article>
+    <article class="card"><div class="card-head"><h3 data-i18n>Conversas · origem → destino</h3></div><div id="pair" class="rank"></div></article>
     <article class="card"><div class="card-head"><h3 data-i18n>ASNs de destino exportados</h3></div><div id="asn" class="rank"></div></article>
+    <article class="card"><div class="card-head"><h3 data-i18n>Protocolos e serviços</h3><small data-i18n>Registos</small></div><div id="proto"></div></article>
     <article class="card full"><div class="card-head"><h3 data-i18n>Intensidade por dia e hora</h3><small data-i18n>UTC · escolhe 7 dias para comparar a semana</small></div><div class="heat-scroll"><div id="heat" class="heat"></div></div></article>
   </section>
 
@@ -180,7 +181,6 @@ try { savedLanguage = localStorage.getItem('fluxo-language'); } catch {}
 let language = FluxoI18n.chooseLanguage(savedLanguage, navigator.languages);
 let fmt;
 const t = message => FluxoI18n.translate(message, language);
-const colors = ['#38d8b0','#8da8ff','#f9bd72','#f58aa6','#92d5f6','#b1a2e8','#a9d984','#f39c6b'];
 const empty = () => '<p class="empty">' + t('Sem dados para estes filtros.') + '</p>';
 const esc = value => String(value ?? '—').replace(/[&<>"']/g, ch => ({
   '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
@@ -264,7 +264,7 @@ async function load(page = 1, charts = true) {
   request = controller;
   loading = true;
   renderFlowPager();
-  status('A consultar o SQLite…');
+  status('A consultar os fluxos…');
   try {
     const data = await viewResponse(params(page, charts), controller.signal);
     if (controller.signal.aborted) return;
@@ -307,14 +307,16 @@ function apply() {
 }
 
 function barList(rows, key) {
-  const max = Math.max(1, ...rows.map(row => row.total));
+  const byCount = key === 'service';
+  const metric = byCount ? 'flows' : 'total';
+  const max = Math.max(1, ...rows.map(row => row[metric]));
   return rows.map(row => {
     const label = t(row.key) + (row.service ? ' · ' + row.service : '');
     const action = key === 'src' || key === 'dst'
       ? 'data-search-ip="' + esc(row.key) : 'data-query="' + esc(key + ':' + row.key);
     return '<button type="button" ' + action + '" title="' + esc(label) +
-      '"><i style="width:' + (100 * row.total / max) + '%"></i><span>' + esc(label) +
-      '</span><b>' + volume(row.total) + '</b></button>';
+      '"><i style="width:' + (100 * row[metric] / max) + '%"></i><span>' + esc(label) +
+      '</span><b>' + (byCount ? fmt.format(row.flows) : volume(row.total)) + '</b></button>';
   }).join('');
 }
 function draw(data) {
@@ -349,21 +351,18 @@ function draw(data) {
   };
 
   renderActivityPeak(data);
-  renderServices(data.charts.port, totals.total);
+  renderServices(data.charts.port);
   for (const key of ['src','dst','pair','asn']) {
     const rows = data.charts[key];
     $(key).innerHTML = rows.length ? barList(rows,key) :
       (key === 'asn' ? `<p class="empty">${t('Sem ASN de destino exportado neste intervalo.')}</p>` : empty());
   }
-  let stop = 0;
-  const segments = data.charts.proto.map((row,i) => {
-    const from = stop;
-    stop += row.total / Math.max(1,totals.total) * 100;
-    return `${colors[i]} ${from}% ${stop}%`;
-  });
-  $('proto').innerHTML = totals.total > 0 ? `<div class="mix"><div class="ring" aria-hidden="true"
-    style="background:conic-gradient(${segments.join(',')},#23354b ${Math.min(stop,100)}% 100%)"></div>
-    <div class="rank">${barList(data.charts.proto,'proto')}</div></div>` : empty();
+  const protocols = data.charts.proto.map(row =>
+    `<button type="button" data-query="proto:${esc(row.key)}">${esc(t(row.key))} · ${fmt.format(row.flows)}</button>`
+  ).join('');
+  $('proto').innerHTML = totals.flows ? `<div class="rank">${data.charts.service.length
+    ? barList(data.charts.service,'service') : '<p class="empty">' + t('Sem serviços identificados.') + '</p>'}
+    </div><div class="transport-list">${protocols}</div>` : empty();
 
   const peakHeat = Math.max(1, ...Object.values(data.heat));
   const days = ['Seg','Ter','Qua','Qui','Sex','Sáb','Dom'].map(t);
@@ -388,6 +387,12 @@ function endpoint(ip, port) {
     data-ptr="${esc(ip)}" aria-label="${t('Resolver')} ${esc(ip)}">PTR</button>
     ${name ? `<small>${esc(name)}</small>` : ''}</span>`;
 }
+function groupLabel(key) {
+  if (key === 'Sem dados') return esc(t(key));
+  if (['src', 'dst'].includes(filters.group)) return ipSearchButton(key);
+  if (filters.group === 'pair') return key.split(' → ').map(ip => ipSearchButton(ip)).join(' → ');
+  return esc(t(key));
+}
 function table(data) {
   const individual = filters.group === 'flow';
   $('table-title').textContent = t(individual ? 'Fluxos individuais' : 'Tráfego agregado');
@@ -400,14 +405,12 @@ function table(data) {
   $('head').innerHTML = '<tr>' + titles.map(title => `<th scope="col">${t(title)}</th>`).join('') + '</tr>';
   $('body').innerHTML = data.rows.length ? data.rows.map(row => {
     const asn = n => n > 0 ? `AS${n}` : '—';
-    const groupLabel = individual ? '' : ['src', 'dst'].includes(filters.group) && row.key !== 'Sem dados'
-      ? ipSearchButton(row.key) : esc(t(row.key));
     const lead = individual ? `<td>${stamp(row.received)}</td><td>${ipSearchButton(row.router)}</td>
       <td>${endpoint(row.src,row.sport)}</td><td>${endpoint(row.dst,row.dport)}</td>
       <td>${esc(t(row.proto))}${row.dport > 0 ? ' / '+esc(row.dport) : ''}${row.service ? ' · '+esc(row.service) : ''}</td>
       <td title="${esc(row.application_id || '')}">${esc(row.application_name || row.application_id || '—')}</td>
       <td>${esc(asn(row.sasn))} / ${esc(asn(row.dasn))}</td>` :
-      `<td>${groupLabel}${row.service ? ' · '+esc(row.service) : ''}</td><td>${fmt.format(row.flows)}</td>`;
+      `<td>${groupLabel(row.key)}${row.service ? ' · '+esc(row.service) : ''}</td><td>${fmt.format(row.flows)}</td>`;
     const map = individual ? `<td><button type="button" class="map-link" data-flow-id="${esc(row.id)}"
       data-flow-received="${row.received}">${t('Ver mapa')}</button></td>` : '';
     return `<tr>${lead}<td class="number up">${volume(row.up)}</td><td class="number down">${volume(row.down)}</td>
