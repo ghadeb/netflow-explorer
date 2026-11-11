@@ -43,7 +43,7 @@ RANKING_KEYS = {
     "port": ("proto, dport", PORT),
     "asn": ("dasn", ASN),
 }
-RANKING_SETTINGS = {
+QUERY_SETTINGS = {
     "max_bytes_before_external_group_by": 64000000,
     "max_bytes_before_external_sort": 64000000,
 }
@@ -117,9 +117,63 @@ def search_predicate(params):
     return predicate
 
 
-def filtered(predicate, *, include_flow=False):
-    columns = FLOW_COLUMNS + (", flow" if include_flow else "")
-    return "WITH filtered AS (SELECT * FROM (" + columns + FLOW_WINDOW + ") WHERE " + predicate + ") "
+def filtered(predicate):
+    return "WITH filtered AS (SELECT * FROM (" + FLOW_COLUMNS + FLOW_WINDOW + ") WHERE " + predicate + ") "
+
+
+def flow_page(client, base, params, order):
+    # Sort only the scalar columns, then use the page's primary keys to
+    # filter the raw records before reading their JSON.
+    sql = base + f"""
+        SELECT toString(f.id) AS id, f.received AS received,
+               IPv4NumToString(f.router) AS router,
+               IPv4NumToString(f.src) AS src, IPv4NumToString(f.dst) AS dst,
+               f.sport AS sport, f.dport AS dport, f.proto AS proto,
+               nullIf(f.sasn,0) AS sasn, nullIf(f.dasn,0) AS dasn, f.packets AS packets,
+               if(f.sent=1,'up','down') AS direction,
+               if(f.sent=1,f.bytes,0) AS up, if(f.sent=0,f.bytes,0) AS down, f.bytes AS total,
+               if(f.sent=1,JSONExtractString(f.flow,'application_id'),'') AS application_id,
+               JSONExtractUInt(f.flow,'observation_domain_id') AS application_domain
+        FROM flows AS f
+        PREWHERE f.received >= {{start:UInt32}} AND f.received < {{end:UInt32}}
+          AND (f.received, f.router, f.id) IN (
+            SELECT received, router_num, id FROM (
+                SELECT received, router_num, id, packets, bytes AS total,
+                       if(sent=1,bytes,0) AS up, if(sent=0,bytes,0) AS down
+                FROM filtered
+                ORDER BY {order}, received DESC, id DESC
+                LIMIT {{limit:UInt64}} OFFSET {{offset:UInt64}}
+            )
+        )
+        ORDER BY {order}, received DESC, f.id DESC
+    """
+    rows = list(client.rows(sql, params, settings=QUERY_SETTINGS))
+    resolve_applications(client, rows)
+    for row in rows:
+        row["service"] = panel.service(row["proto"], row["dport"])
+    return rows
+
+
+def grouped_page(client, base, params, group, order):
+    group_by, key = RANKING_KEYS.get(group, ("key", GROUPS[group]))
+    if group == "port":
+        # Ports without a destination port share a single displayed group.
+        group_by = "key"
+    groups = f"""
+        SELECT if(empty({key}),'Sem dados',{key}) AS key, {TOTALS},
+               max(received) AS received
+        FROM filtered GROUP BY {group_by}
+    """
+    rows = list(client.rows(base + groups + f"""
+        ORDER BY {order}, key LIMIT {{limit:UInt64}} OFFSET {{offset:UInt64}}
+    """, params, settings=QUERY_SETTINGS))
+    matches = next(client.rows(base + f"SELECT count() AS matches FROM ({groups})",
+                               params, settings=QUERY_SETTINGS))["matches"]
+    for row in rows:
+        row["groups"] = matches
+        if group == "port":
+            service_label(row)
+    return rows, matches
 
 
 def destination_map(client, base, params, target, page):
@@ -130,21 +184,23 @@ def destination_map(client, base, params, target, page):
         raise ValueError("Indica um endereço IPv4 ou uma rede IPv4 em formato CIDR.") from exc
     params = dict(params, first=int(network.network_address), last=int(network.broadcast_address),
                   map_offset=(page - 1) * panel.NETWORK_PAGE_SIZE)
-    peer = "if(src_num={first:UInt32},dst_ip,src_ip)" if host else "dst_ip"
+    peer = "if(src_num={first:UInt32},dst_num,src_num)" if host else "dst_num"
     match = "(src_num={first:UInt32} OR dst_num={first:UInt32})" if host else "src_num BETWEEN {first:UInt32} AND {last:UInt32}"
-    sql = base + f"""
-        SELECT *, count() OVER () AS matches, sum(total) OVER () AS network_total,
-               max(total) OVER () AS peak
-        FROM (
-            SELECT {peer} AS peer, {TOTALS},
-                   sumIf(bytes, src_num={{first:UInt32}}) AS from_host,
-                   sumIf(bytes, src_num!={{first:UInt32}}) AS to_host
-            FROM filtered WHERE {match} GROUP BY peer
-        )
-        ORDER BY total DESC, peer LIMIT {panel.NETWORK_PAGE_SIZE} OFFSET {{map_offset:UInt64}}
+    grouped = f"""
+        SELECT {peer} AS peer_num, {TOTALS},
+               sumIf(bytes, src_num={{first:UInt32}}) AS from_host,
+               sumIf(bytes, src_num!={{first:UInt32}}) AS to_host
+        FROM filtered WHERE {match} GROUP BY peer_num
     """
-    rows = list(client.rows(sql, params))
-    summary = rows[0] if rows else {"matches": 0, "network_total": 0, "peak": 0}
+    rows = list(client.rows(base + f"""
+        SELECT IPv4NumToString(peer_num) AS peer, * EXCEPT (peer_num) FROM ({grouped})
+        ORDER BY total DESC, peer LIMIT {panel.NETWORK_PAGE_SIZE} OFFSET {{map_offset:UInt64}}
+    """, params, settings=QUERY_SETTINGS))
+    summary = next(client.rows(base + f"""
+        SELECT count() AS matches, sum(total) AS network_total, max(total) AS peak FROM ({grouped})
+    """, params, settings=QUERY_SETTINGS))
+    for row in rows:
+        row.update(summary)
     return {"target": str(network.network_address) if host else str(network),
             "host": host, "rows": rows, "matches": summary["matches"],
             "total": summary["network_total"], "peak": summary["peak"], "page": page,
@@ -207,7 +263,7 @@ def chart_data(client, base, params):
             FROM filtered GROUP BY {group} HAVING key != ''
             ORDER BY total DESC, key LIMIT 8
         """
-        charts[name] = list(client.rows(ranking, params, settings=RANKING_SETTINGS))
+        charts[name] = list(client.rows(ranking, params, settings=QUERY_SETTINGS))
     for row in charts["port"]:
         service_label(row)
     return {"totals": totals, "series": list(bins.values()), "charts": charts, "heat": heat}
@@ -228,48 +284,20 @@ def query(client, args, committed_id, routers, export=False, now=None):
 
     charts = chart_data(client, base, params) if not export and args.get("charts") != "0" else {}
     totals = charts["totals"] if charts else next(client.rows(base + f"SELECT {TOTALS} FROM filtered", params))
+    order = panel.SORTS[sort]
     if group == "flow":
         if export and totals["flows"] > panel.EXPORT_LIMIT:
             raise ValueError(EXPORT_ERROR)
-        table = """SELECT toString(id) AS flow_id, received, router_ip AS router, src_ip AS src,
-                   dst_ip AS dst, sport, dport, proto, nullIf(sasn,0) AS sasn,
-                   nullIf(dasn,0) AS dasn, packets, if(sent=1,'up','down') AS direction,
-                   if(sent=1,bytes,0) AS up, if(sent=0,bytes,0) AS down, bytes AS total, flow
-                   FROM filtered"""
-        tie = "received DESC, id DESC"
+        rows = flow_page(client, base, params, order)
+        matches = totals["flows"]
     else:
-        table = f"""SELECT *, count() OVER () AS groups FROM (
-                    SELECT if(empty(group_key),'Sem dados',group_key) AS key, {TOTALS},
-                           max(received) AS received
-                    FROM (SELECT *, {GROUPS[group]} AS group_key FROM filtered)
-                    GROUP BY key)"""
-        tie = "key"
-
-    table += f" ORDER BY {panel.SORTS[sort]}, {tie} LIMIT {{limit:UInt64}} OFFSET {{offset:UInt64}}"
-    if group == "flow":
-        table = f"""
-            SELECT * EXCEPT (flow),
-                   if(direction='up', JSONExtractString(flow, 'application_id'), '') AS application_id,
-                   JSONExtractUInt(flow, 'observation_domain_id') AS application_domain
-            FROM ({table})
-            ORDER BY {panel.SORTS[sort]}, received DESC, toUInt64(flow_id) DESC
-        """
-    sql = (filtered(predicate, include_flow=True) if group == "flow" else base) + table
-    rows = list(client.rows(sql, params))
+        rows, matches = grouped_page(client, base, params, group, order)
     if export and len(rows) > panel.EXPORT_LIMIT:
         raise ValueError(EXPORT_ERROR)
-    if group == "flow":
-        resolve_applications(client, rows)
-    for row in rows:
-        if group == "flow":
-            row["id"] = row.pop("flow_id")
-            row["service"] = panel.service(row["proto"], row["dport"])
-        elif group == "port":
-            service_label(row)
     return {
         "rows": rows, "totals": totals, "end": params["end"], "ceiling": str(ceiling),
         "page": page, "size": size, **charts,
-        "matches": totals["flows"] if group == "flow" else (rows[0]["groups"] if rows else 0),
+        "matches": matches,
         "routers": sorted(routers),
     }
 

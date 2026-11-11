@@ -121,7 +121,12 @@ def test_iana_application_names():
 def test_many_distinct_pairs():
     class LimitedMemoryClient(Client):
         def rows(self, sql, params=None, *, streaming=False, settings=None):
-            limits = {"max_memory_usage": 144000000, **(settings or {})}
+            limits = {
+                "max_memory_usage": 144000000,
+                "max_bytes_to_read": 120000000,
+                "query_plan_optimize_lazy_materialization": 0,
+                **(settings or {}),
+            }
             return super().rows(sql, params, streaming=streaming, settings=limits)
 
     now, first_id, count = int(time()), time_ns(), 400_000
@@ -130,12 +135,15 @@ def test_many_distinct_pairs():
         INSERT INTO flows
         SELECT {first_id:UInt64} + number, {now:UInt32} - 60 - 3600 * (number % 2),
                IPv4StringToNum('192.0.2.1'), 3405774848 + number, 3325256704 + number,
-               number % 2, 45000, 443, 0, 64500, number + 1, 1, 'TCP', '{}'
+               number % 2, 45000, 443, 0, 64500, number + 1, 1, 'TCP',
+               concat('{"application_id":"01000001","observation_domain_id":19,"pad":"',
+                      repeat('x', 1024), '"}')
         FROM numbers({count:UInt64})
     """, params={"first_id": first_id, "now": now, "count": count})
 
-    data = clickhouse_view.query(client, {"minutes": "10080", "router": "192.0.2.1"},
-                                 first_id + count - 1, {"192.0.2.1"}, now=now)
+    scope = {"minutes": "10080", "router": "192.0.2.1"}
+    ceiling = first_id + count - 1
+    data = clickhouse_view.query(client, scope, ceiling, {"192.0.2.1"}, now=now)
     total = count * (count + 1) // 2
     assert data["totals"]["flows"] == count
     assert data["totals"]["total"] == total
@@ -145,7 +153,18 @@ def test_many_distinct_pairs():
     assert [row["total"] for row in pairs] == list(range(count, count - 8, -1))
     assert pairs[0]["key"] == f"{IPv4Address(3405774848 + count - 1)} → {IPv4Address(3325256704 + count - 1)}"
     assert data["charts"]["port"][0]["service"] == "https"
-    print("OK: exact dashboard totals and rankings for 400,000 distinct pairs with a 144 MB query limit")
+    assert data["rows"][0]["application_name"] == "ICMP", data["rows"][0]
+    assert data["rows"][1]["application_id"] is None, data["rows"][1]
+    for group in ("flow", "pair"):
+        page = clickhouse_view.query(client, {**scope, "charts": "0", "page": "2", "group": group},
+                                     ceiling, {"192.0.2.1"}, now=now)
+        assert page["matches"] == count and len(page["rows"]) == 25
+        assert [row["total"] for row in page["rows"]] == list(range(count - 25, count - 50, -1))
+    network = clickhouse_view.query(client, {**scope, "network": "203.0.0.0/8", "page": "2"},
+                                    ceiling, {"192.0.2.1"}, now=now)
+    assert network["matches"] == count and network["total"] == total and network["peak"] == count
+    assert [row["total"] for row in network["rows"]] == list(range(count - 12, count - 24, -1))
+    print("OK: exact live pages, totals and rankings for 400,000 flows with a 144 MB query limit")
 
 
 def main():
