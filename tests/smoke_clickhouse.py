@@ -134,15 +134,17 @@ def test_many_distinct_pairs():
 
     now, first_id, count = int(time()), time_ns(), 400_000
     client = LimitedMemoryClient(timeout=30)
-    client.execute("""
-        INSERT INTO flows
-        SELECT {first_id:UInt64} + number, {now:UInt32} - 60 - 3600 * (number % 2),
-               IPv4StringToNum('192.0.2.1'), 3405774848 + number, 3325256704 + number,
-               number % 2, 45000, 443, 0, 64500, number + 1, 1, 'TCP',
-               concat('{"application_id":"01000001","observation_domain_id":19,"pad":"',
-                      repeat('x', 1024), '"}')
-        FROM numbers({count:UInt64})
-    """, params={"first_id": first_id, "now": now, "count": count})
+    batch_size = 100_000
+    for offset in range(0, count, batch_size):
+        client.execute("""
+            INSERT INTO flows
+            SELECT {first_id:UInt64} + number, {now:UInt32} - 60 - 3600 * (number % 2),
+                   IPv4StringToNum('192.0.2.1'), 3405774848 + number, 3325256704 + number,
+                   number % 2, 45000, 443, 0, 64500, number + 1, 1, 'TCP',
+                   concat('{"application_id":"01000001","observation_domain_id":19,"pad":"',
+                          repeat('x', 1024), '"}')
+            FROM numbers({offset:UInt64}, {batch:UInt64})
+        """, params={"first_id": first_id, "now": now, "offset": offset, "batch": batch_size})
 
     scope = {"minutes": "10080", "router": "192.0.2.1"}
     ceiling = first_id + count - 1
