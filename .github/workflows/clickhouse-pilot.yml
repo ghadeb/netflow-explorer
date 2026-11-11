@@ -2,6 +2,7 @@ name: ClickHouse integration test
 on:
   push:
     branches: [main, ghadeb/clickhouse-pilot]
+  workflow_dispatch:
 permissions:
   contents: read
 
@@ -65,6 +66,23 @@ jobs:
         run: |
           docker compose cp tests/smoke_udp.py collector:/tmp/smoke_udp.py
           docker compose exec -T collector python - < tests/smoke_clickhouse.py
+      - name: Save the tested AMD64 collector
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/collector-image"
+          cd "$RUNNER_TEMP/collector-image"
+          docker image save fluxo-collector:clickhouse-pilot | gzip -1 > netflow-explorer-collector-linux-amd64.tar.gz
+          sha256sum netflow-explorer-collector-linux-amd64.tar.gz > SHA256SUMS
+      - name: Upload the collector image
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: collector-linux-amd64
+          path: ${{ runner.temp }}/collector-image/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
       - name: Report logs on failure
         if: failure()
         run: docker compose logs --tail=100
