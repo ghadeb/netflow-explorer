@@ -1,7 +1,8 @@
 """Exercise the pilot in a disposable Linux Compose project."""
 from datetime import UTC, datetime
+from ipaddress import IPv4Address
 from threading import Event
-from time import monotonic, sleep, time
+from time import monotonic, sleep, time, time_ns
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 import json
@@ -14,6 +15,7 @@ import socket
 
 from collector.clickhouse import Client, DAY, Writer, encode_batch
 from clickhouse_archive import archive_pass
+import clickhouse_view
 import daily_archive
 
 TLS = ssl.create_default_context(cafile="/tls/cert.pem")
@@ -87,6 +89,36 @@ def test_nbar():
         assert b"test-app" in api("api/export", {"q": args["q"]})
 
 
+def test_many_distinct_pairs():
+    class LimitedMemoryClient(Client):
+        def rows(self, sql, params=None, *, streaming=False, settings=None):
+            limits = {"max_memory_usage": 144000000, **(settings or {})}
+            return super().rows(sql, params, streaming=streaming, settings=limits)
+
+    now, first_id, count = int(time()), time_ns(), 400_000
+    client = LimitedMemoryClient(timeout=30)
+    client.execute("""
+        INSERT INTO flows
+        SELECT {first_id:UInt64} + number, {now:UInt32} - 60 - 3600 * (number % 2),
+               IPv4StringToNum('192.0.2.1'), 3405774848 + number, 3325256704 + number,
+               number % 2, 45000, 443, 0, 64500, number + 1, 1, 'TCP', '{}'
+        FROM numbers({count:UInt64})
+    """, params={"first_id": first_id, "now": now, "count": count})
+
+    data = clickhouse_view.query(client, {"minutes": "10080", "router": "192.0.2.1"},
+                                 first_id + count - 1, {"192.0.2.1"}, now=now)
+    total = count * (count + 1) // 2
+    assert data["totals"]["flows"] == count
+    assert data["totals"]["total"] == total
+    assert sum(data["heat"].values()) == total and len(data["heat"]) == 2
+    assert [row["total"] for row in data["series"] if row.get("total")] == [total]
+    pairs = data["charts"]["pair"]
+    assert [row["total"] for row in pairs] == list(range(count, count - 8, -1))
+    assert pairs[0]["key"] == f"{IPv4Address(3405774848 + count - 1)} → {IPv4Address(3325256704 + count - 1)}"
+    assert data["charts"]["port"][0]["service"] == "https"
+    print("OK: exact dashboard totals and rankings for 400,000 distinct pairs with a 144 MB query limit")
+
+
 def main():
     data = wait_for_flows()
     assert data["charts"]["port"], data
@@ -139,6 +171,7 @@ def main():
     imported = json.loads(api("api/archives/open", body={"date": day}))
     history = view(minutes=1440, archive=imported["id"])
     assert history["totals"]["flows"] == 1001 and history["totals"]["total"] == 500123
+    test_many_distinct_pairs()
     print("OK: UDP, TLS, ClickHouse views and CSV, idempotent retry, verified expiry and archive reopen")
 
 

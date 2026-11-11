@@ -24,16 +24,29 @@ GROUPS = {
     "srcnet": "concat(IPv4NumToString(bitAnd(src_num,{mask:UInt32})), '/', toString({prefix:UInt8}))",
     "dstnet": "concat(IPv4NumToString(bitAnd(dst_num,{mask:UInt32})), '/', toString({prefix:UInt8}))",
 }
-BASE = """
+FLOW_COLUMNS = """
     SELECT id, received, router AS router_num, src AS src_num, dst AS dst_num,
            IPv4NumToString(router) AS router_ip, IPv4NumToString(src) AS src_ip,
            IPv4NumToString(dst) AS dst_ip, sport, dport, proto, sasn, dasn,
-           bytes, packets, sent, flow
+           bytes, packets, sent
+"""
+FLOW_WINDOW = """
     FROM flows
     WHERE received >= {start:UInt32} AND received < {end:UInt32} AND id <= {ceiling:UInt64}
       AND ({router:String}='' OR router={router_num:UInt32})
       AND ({direction:String}='' OR sent=({direction:String}='up'))
 """
+RANKING_KEYS = {
+    "src": ("src_num", "IPv4NumToString(src_num)"),
+    "dst": ("dst_num", "IPv4NumToString(dst_num)"),
+    "pair": ("src_num, dst_num", "concat(IPv4NumToString(src_num),' → ',IPv4NumToString(dst_num))"),
+    "port": ("proto, dport", PORT),
+    "asn": ("dasn", ASN),
+}
+RANKING_SETTINGS = {
+    "max_bytes_before_external_group_by": 64000000,
+    "max_bytes_before_external_sort": 64000000,
+}
 EXPORT_ERROR = "A exportação excede 50 000 linhas. Reduz o período ou aplica um filtro."
 
 
@@ -63,7 +76,7 @@ def resolve_applications(client, rows):
         row["application_name"] = names.get(key)
 
 
-def filtered(params):
+def search_predicate(params):
     field, sep, value = params["q"].partition(":")
     aliases = {**CHARTS, "router": "router_ip", "sasn": "sasn", "dasn": "dasn"}
     if sep and field in aliases:
@@ -80,7 +93,12 @@ def filtered(params):
             predicate += " OR lower(" + PORT + ") IN (" + services + ")"
     else:
         predicate = "1"
-    return "WITH filtered AS (SELECT * FROM (" + BASE + ") WHERE " + predicate + ") "
+    return predicate
+
+
+def filtered(predicate, *, include_flow=False):
+    columns = FLOW_COLUMNS + (", flow" if include_flow else "")
+    return "WITH filtered AS (SELECT * FROM (" + columns + FLOW_WINDOW + ") WHERE " + predicate + ") "
 
 
 def destination_map(client, base, params, target, page):
@@ -139,44 +157,38 @@ def service_label(row):
 
 
 def chart_data(client, base, params):
-    # One input scan for totals, time buckets, heatmap and rankings.
-    dimensions = {"series": "slot", "heat": "hour_slot", "src": "src_ip", "dst": "dst_ip",
-                  "proto": "proto", "port": "port_key", "pair": "pair_key", "asn": "asn_key"}
-    kind = ", ".join(f"grouping({column})=0, '{name}'" for name, column in dimensions.items())
-    key = ", ".join(f"grouping({column})=0, toString({column})" for column in dimensions.values())
-    grouping = ", ".join(f"({column})" for column in dimensions.values())
+    # Each time bucket can cover several hours. Sum the same grouped rows for
+    # totals, the timeline and the UTC heatmap.
     sql = base + f"""
-        SELECT * FROM (
-            SELECT multiIf({kind},'totals') AS kind, multiIf({key},'') AS key, {TOTALS}
-            FROM (
-                SELECT *, {PORT} AS port_key, {ASN} AS asn_key, {PAIR} AS pair_key,
-                    {{start:UInt32}}+intDiv(received-{{start:UInt32}},{{step:UInt32}})*{{step:UInt32}} AS slot,
-                    (toDayOfWeek(toDateTime(received,'UTC'))-1)*24+toHour(toDateTime(received,'UTC')) AS hour_slot
-                FROM filtered
-            )
-            GROUP BY GROUPING SETS ({grouping}, ())
-        )
-        WHERE key!='' OR kind='totals'
-        ORDER BY kind, total DESC, key LIMIT 168 BY kind
+        SELECT {{start:UInt32}}+intDiv(received-{{start:UInt32}},{{step:UInt32}})*{{step:UInt32}} AS slot,
+               (toDayOfWeek(toDateTime(received,'UTC'))-1)*24+toHour(toDateTime(received,'UTC')) AS hour_slot,
+               {TOTALS}
+        FROM filtered GROUP BY slot, hour_slot
     """
     totals = dict.fromkeys(("up", "down", "total", "packets", "flows"), 0)
     bins = {at: {"at": at, "up": 0, "down": 0} for at in range(params["start"], params["end"], params["step"])}
-    charts = {name: [] for name in CHARTS}
     heat = {}
     for row in client.rows(sql, params):
-        kind = row.pop("kind")
-        if kind == "totals":
-            row.pop("key")
-            totals = row
-        elif kind == "series":
-            at = int(row.pop("key"))
-            bins[at] = {**row, "at": at}
-        elif kind == "heat":
-            heat[int(row["key"])] = row["total"]
-        elif len(charts[kind]) < 8:
-            if kind == "port":
-                service_label(row)
-            charts[kind].append(row)
+        bucket = bins[row["slot"]]
+        hour = row["hour_slot"]
+        heat[hour] = heat.get(hour, 0) + row["total"]
+        for metric in totals:
+            totals[metric] += row[metric]
+            bucket[metric] = bucket.get(metric, 0) + row[metric]
+
+    # Run the rankings serially so high-cardinality address and pair groups do
+    # not retain their aggregate tables at the same time.
+    charts = {}
+    for name, expression in CHARTS.items():
+        group, key = RANKING_KEYS.get(name, ("key", expression))
+        ranking = base + f"""
+            SELECT {key} AS key, {TOTALS}
+            FROM filtered GROUP BY {group} HAVING key != ''
+            ORDER BY total DESC, key LIMIT 8
+        """
+        charts[name] = list(client.rows(ranking, params, settings=RANKING_SETTINGS))
+    for row in charts["port"]:
+        service_label(row)
     return {"totals": totals, "series": list(bins.values()), "charts": charts, "heat": heat}
 
 
@@ -188,7 +200,8 @@ def query(client, args, committed_id, routers, export=False, now=None):
     params["mask"] = (0xffffffff << (32 - params["prefix"])) & 0xffffffff
     if not export and "flow_id" in args:
         return observation(client, args, params)
-    base = filtered(params)
+    predicate = search_predicate(params)
+    base = filtered(predicate)
     if not export and "network" in args:
         return destination_map(client, base, params, args["network"], page)
 
@@ -220,7 +233,7 @@ def query(client, args, committed_id, routers, export=False, now=None):
             FROM ({table})
             ORDER BY {panel.SORTS[sort]}, received DESC, toUInt64(flow_id) DESC
         """
-    sql = base + table
+    sql = (filtered(predicate, include_flow=True) if group == "flow" else base) + table
     rows = list(client.rows(sql, params))
     if export and len(rows) > panel.EXPORT_LIMIT:
         raise ValueError(EXPORT_ERROR)

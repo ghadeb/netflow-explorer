@@ -97,14 +97,15 @@ class Client:
         if result.strip():
             raise ClickHouseError("Unexpected ClickHouse command response.")
 
-    def rows(self, sql, params=None, *, streaming=False):
-        settings = {
+    def rows(self, sql, params=None, *, streaming=False, settings=None):
+        query_settings = {
             "output_format_json_quote_64bit_integers": 0,
             "max_threads": 1,
             "max_execution_time": 0 if streaming else 12,
             "wait_end_of_query": 0 if streaming else 1,
+            **(settings or {}),
         }
-        with self.request(sql + " FORMAT JSONEachRow", params, settings) as response:
+        with self.request(sql + " FORMAT JSONEachRow", params, query_settings) as response:
             try:
                 for line in response:
                     yield json.loads(line)
