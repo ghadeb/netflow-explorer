@@ -55,6 +55,13 @@ CREATE TABLE IF NOT EXISTS application_names (
 ENGINE = ReplacingMergeTree(seen_at)
 ORDER BY (router, domain, application_id)
 """
+APPLICATION_COLUMNS = """
+ALTER TABLE flows
+    ADD COLUMN IF NOT EXISTS application_id String
+        MATERIALIZED JSONExtractString(flow, 'application_id'),
+    ADD COLUMN IF NOT EXISTS application_domain UInt64
+        MATERIALIZED JSONExtractUInt(flow, 'observation_domain_id')
+"""
 APPLICATION_ID = re.compile(r"(?:[0-9a-f]{2}){2,16}")
 APPLICATION_CACHE_LIMIT = 32768
 
@@ -191,6 +198,7 @@ class Writer:
         startup = Client(timeout=60)
         startup.execute(DDL)
         startup.execute(APPLICATION_OPTIONS)
+        startup.execute(APPLICATION_COLUMNS)
         codec = next(startup.rows("""
             SELECT compression_codec FROM system.columns
             WHERE database='netflow' AND table='flows' AND name='flow'

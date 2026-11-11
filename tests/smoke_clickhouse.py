@@ -54,6 +54,7 @@ def synthetic(day, size):
         "time_received_ns": (day + 3600) * 10**9, "src_addr": "203.0.113.25",
         "dst_addr": "198.51.100.9", "src_port": 45000, "dst_port": 443,
         "proto": "TCP", "bytes": size, "packets": 1, "dst_as": 64500,
+        "application_id": "0d00002a", "observation_domain_id": 19,
     })
     return ("up", raw)
 
@@ -99,6 +100,9 @@ def test_nbar():
             sleep(0.3)
         assert rows["down"]["application_name"] == "down-test-app", rows
         assert rows["up"]["application_name"] == "test-app", rows
+        filtered = view(q="app:DOWN-TEST-APP")
+        assert filtered["matches"] == 1 and filtered["rows"][0]["direction"] == "down", filtered
+        assert view(q="app:different-domain", charts=0)["matches"] == 0
         down = rows["down"]
         observation = view(end=data["end"], ceiling=data["ceiling"], flow_id=down["id"],
                            flow_received=down["received"], charts=0)
@@ -137,6 +141,7 @@ def test_iana_application_names():
                        flow_received=row["received"], charts=0)
     assert observation["application_name"] == "bgp", observation
     assert b"snmp" in api("api/export", {"q": args["q"]})
+    assert view(q="app:ICMP", charts=0)["matches"] >= 1
 
 
 def test_many_distinct_pairs():
@@ -244,6 +249,8 @@ def main():
     imported = json.loads(api("api/archives/open", body={"date": day}))
     history = view(minutes=1440, archive=imported["id"])
     assert history["totals"]["flows"] == 1000 and history["totals"]["total"] == 500000
+    assert history["rows"][0]["application_name"] == "test-app"
+    assert view(minutes=1440, archive=imported["id"], q="app:test-app", charts=0)["matches"] == 1000
 
     # A later batch for an expired day must extend the existing archive.
     assert Writer().ingest([synthetic(old, 123)], {"127.0.0.1"}, Event()) == 1

@@ -61,6 +61,25 @@ class ExplorerTest(TestCase):
         data = server.query(self.db, {"q": "203.0.113.1"}, now=NOW)
         self.assertEqual(data["matches"], 2)
 
+    def test_application_filter_respects_exporter_domains_and_iana_fallback(self):
+        self.add_flow(application_id="0d00002a", observation_domain_id=6)
+        self.add_flow(application_id="0d00002a", observation_domain_id=256)
+        self.add_flow(application_id="0d00002a", observation_domain_id=257)
+        self.add_flow(application_id="030001bb")
+        self.add_flow()
+        router = server.ipv4_number(ROUTER)
+        catalog = server.ApplicationNames({
+            (router, 6, "0d00002a"): "syslog",
+            (router, 256, "0d00002a"): "custom",
+        })
+        names = {"load_applications": lambda: catalog}
+        data = server.query(self.db, {"q": "app:SYSLOG"}, now=NOW, **names)
+        self.assertEqual(data["matches"], 1)
+        self.assertEqual(data["rows"][0]["application_name"], "syslog")
+        data = server.query(self.db, {"q": "app:https"}, now=NOW, **names)
+        self.assertEqual(data["matches"], 1)
+        self.assertEqual(data["rows"][0]["application_name"], "https")
+
     def test_top_ports_use_record_count_and_service_filter(self):
         self.add_flow(dport=443, size=1_000_000)
         self.add_flow(dport=53, direction="up")

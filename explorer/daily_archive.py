@@ -332,7 +332,7 @@ def open_saved_archive(day):
         return stage_import(source, os.fstat(source.fileno()).st_size, day, checksum)
 
 
-def handler(base):
+def handler(base, load_applications=panel.ApplicationNames):
     class ArchiveHandler(base):
         def do_POST(self):
             if self.path not in {"/api/import", "/api/archives/open"}:
@@ -395,7 +395,8 @@ def handler(base):
                     deadline = monotonic() + 15
                     db.set_progress_handler(lambda: monotonic() >= deadline, 10_000)
                     day = db.execute("SELECT day FROM archive_info").fetchone()[0]
-                    result = panel.query(db, args, export=export, now=day + DAY)
+                    result = panel.query(db, args, export=export, now=day + DAY,
+                                         load_applications=load_applications)
             except (ValueError, sqlite3.Error) as exc:
                 return self.send_json(400, {"error": f"Consulta indisponível. {exc}"})
             finally:

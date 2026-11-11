@@ -5,7 +5,7 @@ from time import time
 from urllib.parse import parse_qs, urlsplit
 import logging
 
-from collector.clickhouse import APPLICATION_ID, ClickHouseError, Client
+from collector.clickhouse import ClickHouseError, Client
 import server as panel
 
 LOG = logging.getLogger(__name__)
@@ -47,54 +47,49 @@ QUERY_SETTINGS = {
     "max_bytes_before_external_group_by": 64000000,
     "max_bytes_before_external_sort": 64000000,
 }
-# RFC 6759: engine 13 (PANA-L7) identifies a manufacturer-wide application.
-PANA_L7_PREFIX = "0d"
 EXPORT_ERROR = "A exportação excede 50 000 linhas. Reduz o período ou aplica um filtro."
 
 
-def iana_application_name(app_id):
-    # Cisco NetFlow v9 can pad the IANA selector to three bytes.
-    if (len(app_id) == 4 and app_id.startswith("01")
-            or len(app_id) == 8 and app_id.startswith("010000")):
-        return panel.PROTOCOLS.get(str(int(app_id[-2:], 16)))
-    if (len(app_id) == 6 and app_id.startswith("03")
-            or len(app_id) == 8 and app_id.startswith("0300")):
-        # RFC 6759 §4.4 uses the TCP registration for IANA-L4 port names.
-        return panel.service("tcp", int(app_id[-4:], 16)) or None
-    return None
-
-
-def resolve_applications(client, rows):
-    pending = []
-    for row in rows:
-        domain = row.pop("application_domain", 0)
-        app_id = row.get("application_id")
-        if (isinstance(app_id, str)
-                and APPLICATION_ID.fullmatch(app_id) and not app_id.startswith("00")
-                and isinstance(domain, int) and 0 <= domain < 2**32):
-            pending.append((row, (int(IPv4Address(row["router"])), domain, app_id)))
-        else:
-            row["application_id"] = None
-    if not pending:
-        return
-    routers = sorted({key[0] for _, key in pending})
-    names = {
+def load_application_names(client, routers=None):
+    where = "WHERE router IN {routers:Array(UInt32)}" if routers is not None else ""
+    params = {"routers": str(sorted(routers))} if routers is not None else None
+    return panel.ApplicationNames({
         (entry["router"], entry["domain"], entry["application_id"]): entry["application_name"]
-        for entry in client.rows("""
+        for entry in client.rows(f"""
             SELECT router, domain, application_id, argMax(name, seen_at) AS application_name
-            FROM application_names WHERE router IN {routers:Array(UInt32)}
+            FROM application_names {where}
             GROUP BY router, domain, application_id
-        """, {"routers": str(routers)})
-    }
-    exporter_names = {}
-    for (router, _domain, app_id), name in names.items():
-        if len(app_id) == 8 and app_id.startswith(PANA_L7_PREFIX):
-            key = (router, app_id)
-            if exporter_names.setdefault(key, name) != name:
-                exporter_names[key] = None
-    for row, (router, domain, app_id) in pending:
-        name = names.get((router, domain, app_id), exporter_names.get((router, app_id)))
-        row["application_name"] = name or iana_application_name(app_id)
+        """, params)
+    })
+
+
+def resolve_applications(client, rows, names=None):
+    if names is None:
+        routers = {int(IPv4Address(row["router"])) for row in rows if row.get("application_id")}
+        names = load_application_names(client, routers) if routers else panel.ApplicationNames()
+    names.label_rows(rows)
+
+
+def application_predicate(params, names, value):
+    exact, exporters, iana, overrides = names.search_keys(value.strip().casefold())
+    key = "(router_num, application_domain, application_id)"
+    direct, fallback = [], []
+    if exact:
+        params["app_exact"] = str(sorted(exact))
+        direct.append(key + " IN {app_exact:Array(Tuple(UInt32,UInt64,String))}")
+    if exporters:
+        params["app_exporters"] = str(sorted(exporters))
+        fallback.append("(router_num, application_id) IN {app_exporters:Array(Tuple(UInt32,String))}")
+    if iana:
+        params["app_iana"] = str(sorted(iana))
+        fallback.append("application_id IN {app_iana:Array(String)}")
+    if fallback:
+        clause = "(" + " OR ".join(fallback) + ")"
+        if overrides:
+            params["app_overrides"] = str(sorted(overrides))
+            clause += " AND " + key + " NOT IN {app_overrides:Array(Tuple(UInt32,UInt64,String))}"
+        direct.append("(" + clause + ")")
+    return "(" + " OR ".join(direct) + ") AND application_domain < 4294967296" if direct else "0"
 
 
 def search_predicate(params):
@@ -126,13 +121,13 @@ def search_predicate(params):
     return predicate
 
 
-def filtered(predicate):
-    return "WITH filtered AS (SELECT * FROM (" + FLOW_COLUMNS + FLOW_WINDOW + ") WHERE " + predicate + ") "
+def filtered(predicate, application_filter=False):
+    columns = FLOW_COLUMNS + (", application_id, application_domain" if application_filter else "")
+    return "WITH filtered AS (SELECT * FROM (" + columns + FLOW_WINDOW + ") WHERE " + predicate + ") "
 
 
-def flow_page(client, base, params, order):
-    # Sort only the scalar columns, then use the page's primary keys to
-    # filter the raw records before reading their JSON.
+def flow_page(client, base, params, order, names):
+    # Sort the matching records before loading the columns needed for display.
     sql = base + f"""
         SELECT toString(f.id) AS id, f.received AS received,
                IPv4NumToString(f.router) AS router,
@@ -141,8 +136,7 @@ def flow_page(client, base, params, order):
                nullIf(f.sasn,0) AS sasn, nullIf(f.dasn,0) AS dasn, f.packets AS packets,
                if(f.sent=1,'up','down') AS direction,
                if(f.sent=1,f.bytes,0) AS up, if(f.sent=0,f.bytes,0) AS down, f.bytes AS total,
-               JSONExtractString(f.flow,'application_id') AS application_id,
-               JSONExtractUInt(f.flow,'observation_domain_id') AS application_domain
+               f.application_id AS application_id, f.application_domain AS application_domain
         FROM flows AS f
         PREWHERE f.received >= {{start:UInt32}} AND f.received < {{end:UInt32}}
           AND (f.received, f.router, f.id) IN (
@@ -157,7 +151,7 @@ def flow_page(client, base, params, order):
         ORDER BY {order}, received DESC, f.id DESC
     """
     rows = list(client.rows(sql, params, settings=QUERY_SETTINGS))
-    resolve_applications(client, rows)
+    resolve_applications(client, rows, names)
     for row in rows:
         row["service"] = panel.service(row["proto"], row["dport"])
     return rows
@@ -286,8 +280,14 @@ def query(client, args, committed_id, routers, export=False, now=None):
     params, group, sort, page, size = panel.query_scope(args, now, ceiling, export)
     params["router_num"] = int(IPv4Address(params["router"])) if params["router"] else 0
     params["mask"] = (0xffffffff << (32 - params["prefix"])) & 0xffffffff
-    predicate = search_predicate(params)
-    base = filtered(predicate)
+    names = None
+    if params["q"].startswith("app:"):
+        selected = [params["router_num"]] if params["router"] else None
+        names = load_application_names(client, selected)
+        predicate = application_predicate(params, names, params["q"][4:])
+    else:
+        predicate = search_predicate(params)
+    base = filtered(predicate, application_filter=names is not None)
     if not export and "network" in args:
         return destination_map(client, base, params, args["network"])
 
@@ -297,7 +297,7 @@ def query(client, args, committed_id, routers, export=False, now=None):
     if group == "flow":
         if export and totals["flows"] > panel.EXPORT_LIMIT:
             raise ValueError(EXPORT_ERROR)
-        rows = flow_page(client, base, params, order)
+        rows = flow_page(client, base, params, order, names)
         matches = totals["flows"]
     else:
         rows, matches = grouped_page(client, base, params, group, order)

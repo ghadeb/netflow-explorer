@@ -13,7 +13,7 @@ NetFlow Explorer collects flow records from your network exporters, stores them 
 - **Interactive weathermaps** for individual flows, the peers of an IPv4 host, or the destinations reached from a source subnet.
 - **Traffic analytics** with top talkers, the 20 busiest destination ports by record count, identified services, a UTC activity heatmap, and separate sent and received totals.
 - **Flow explorer** with search, aggregation by host, conversation, subnet, port or ASN, and an editable page selector. View source and destination endpoints, packet and byte counts, and exported BGP ASNs. Resolve reverse DNS on demand and export filtered results to CSV.
-- **Cisco NBAR labels** on live flows in both directions, individual weathermaps and CSV when the exporter supplies the application ID and name table.
+- **Cisco NBAR labels** on flows in both directions, individual weathermaps and CSV. Click an application name to filter by it. Archived flows can reuse the collector's application name table.
 - **Daily archive browser** with 30 days of live ClickHouse queries by default. Select a verified daily `.sqlite3.xz` from the server or upload one. Historical queries run against a separate read-only copy.
 - **Direct HTTPS dashboard** with English and Portuguese, automatic refresh every ten minutes in Live, and a manual refresh control.
 

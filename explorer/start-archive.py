@@ -11,9 +11,17 @@ original_run = collector.run
 
 
 def run():
+    load_applications = daily_archive.panel.ApplicationNames
     if os.environ.get("CLICKHOUSE_URL"):
-        from collector.clickhouse import Writer
+        from collector.clickhouse import ClickHouseError, Client, Writer
         import clickhouse_view
+
+        def load_applications():
+            try:
+                return clickhouse_view.load_application_names(Client(timeout=3))
+            except ClickHouseError as exc:
+                clickhouse_view.LOG.warning("Application names unavailable for archive: %s", exc)
+                return daily_archive.panel.ApplicationNames()
 
         storage = Writer()
         base = clickhouse_view.handler(collector.Handler, storage)
@@ -27,7 +35,7 @@ def run():
         # Daily archival owns expiry. The original time-only purge is disabled.
         collector.prune = lambda *_: None
 
-    collector.Handler = daily_archive.handler(base)
+    collector.Handler = daily_archive.handler(base, load_applications)
     worker = subprocess.Popen([sys.executable, "-u", f"/painel/{script}"])
     try:
         original_run(storage)

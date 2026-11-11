@@ -29,8 +29,8 @@ nav [aria-current] { border-color: var(--line); background: var(--panel); color:
 .service-bars .sent { background: var(--up); }
 .service-bars .received { background: var(--down); }
 .service-total { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.ip-link { color: #a8e8df; background: transparent; border: 0; border-radius: 3px; padding: 1px 0; font: inherit; text-align: left; }
-.ip-link:hover, .ip-link:focus-visible { color: var(--up); text-decoration: underline; text-underline-offset: 3px; }
+.ip-link, .filter-link { color: #a8e8df; background: transparent; border: 0; border-radius: 3px; padding: 1px 0; font: inherit; text-align: left; }
+.ip-link:hover, .ip-link:focus-visible, .filter-link:hover, .filter-link:focus-visible { color: var(--up); text-decoration: underline; text-underline-offset: 3px; }
 .map-card { margin-top: 12px; border-radius: 22px; padding: clamp(16px, 3vw, 32px); }
 .flow-path { display: grid; grid-template-columns: repeat(var(--nodes), minmax(0, 1fr)); list-style: none; padding: 0; margin: 26px 0 16px; }
 .map-node { --marker: #9aacc1; display: grid; justify-items: center; align-content: start; gap: 10px; min-width: 0; padding: 0 8px; text-align: center; position: relative; }

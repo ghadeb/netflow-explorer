@@ -99,7 +99,7 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
   </div>
   <form id="filters">
     <label class="search"><span data-i18n>Pesquisar</span>
-      <input name="q" type="search" maxlength="160" placeholder="IP, porto, serviço, protocolo ou AS…" data-i18n-placeholder="IP, porto, serviço, protocolo ou AS…" autocomplete="off">
+      <input name="q" type="search" maxlength="259" placeholder="IP, porto, serviço, aplicação ou AS…" data-i18n-placeholder="IP, porto, serviço, aplicação ou AS…" autocomplete="off">
     </label>
     <label><span data-i18n>Período</span>
       <select name="minutes"><option value="15">15 min</option><option value="60" selected data-i18n>1 hora</option><option value="360" data-i18n>6 horas</option><option value="1440" data-i18n>24 horas</option><option value="10080" data-i18n>7 dias</option><option value="43200" data-i18n>30 dias</option></select>
@@ -393,6 +393,12 @@ function groupLabel(key) {
   if (filters.group === 'pair') return key.split(' → ').map(ip => ipSearchButton(ip)).join(' → ');
   return esc(t(key));
 }
+function applicationLabel(row) {
+  if (row.application_name) {
+    return `<button class="filter-link" type="button" data-query="app:${esc(row.application_name)}">${esc(row.application_name)}</button>`;
+  }
+  return row.application_id ? t('Sem nome') : '—';
+}
 function table(data) {
   const individual = filters.group === 'flow';
   $('table-title').textContent = t(individual ? 'Fluxos individuais' : 'Tráfego agregado');
@@ -408,7 +414,7 @@ function table(data) {
     const lead = individual ? `<td>${stamp(row.received)}</td><td>${ipSearchButton(row.router)}</td>
       <td>${endpoint(row.src,row.sport)}</td><td>${endpoint(row.dst,row.dport)}</td>
       <td>${esc(t(row.proto))}${row.dport > 0 ? ' / '+esc(row.dport) : ''}${row.service ? ' · '+esc(row.service) : ''}</td>
-      <td title="${esc(row.application_id || '')}">${esc(row.application_name || row.application_id || '—')}</td>
+      <td title="${esc(row.application_id || '')}">${applicationLabel(row)}</td>
       <td>${esc(asn(row.sasn))} / ${esc(asn(row.dasn))}</td>` :
       `<td>${groupLabel(row.key)}${row.service ? ' · '+esc(row.service) : ''}</td><td>${fmt.format(row.flows)}</td>`;
     const map = individual ? `<td><button type="button" class="map-link" data-flow-id="${esc(row.id)}"
@@ -447,13 +453,14 @@ setInterval(() => {
 $('prev').onclick = () => load(current.page - 1, false);
 $('next').onclick = () => load(current.page + 1, false);
 $('sort').onchange = $('size').onchange = () => { if (current) load(1,false); };
-$('patterns').onclick = event => {
-  const button = event.target.closest('[data-query]');
-  if (button) { form.elements.q.value = button.dataset.query; apply(); }
-};
 document.addEventListener('click', event => {
   const ip = event.target.closest('[data-search-ip]')?.dataset.searchIp;
   if (ip) showView(dataset, ip);
+  const query = event.target.closest('[data-query]')?.dataset.query;
+  if (query) {
+    form.elements.q.value = query;
+    apply();
+  }
 });
 $('body').onclick = async event => {
   const flow = event.target.closest('[data-flow-id]');

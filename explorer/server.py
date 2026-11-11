@@ -11,6 +11,7 @@ import csv
 import io
 import json
 import logging
+import re
 import sqlite3
 import sys
 
@@ -26,6 +27,9 @@ if not SERVICE_FILE.is_file():
 SERVICES = json.loads(SERVICE_FILE.read_text())
 PROTOCOLS = {"1": "ICMP", "6": "TCP", "17": "UDP", "33": "DCCP",
              "47": "GRE", "50": "ESP", "51": "AH", "132": "SCTP"}
+APP_ID_PATTERN = re.compile(r"(?:[0-9a-f]{2}){2,16}")
+# RFC 6759 assigns these selectors at device or manufacturer scope.
+EXPORTER_APP_ENGINES = {"02", "04", "06", "0c", "0d"}
 WINDOWS = {15, 60, 360, 1440, 10080, 43200}
 EXPORT_LIMIT = 50_000
 QUERIES = BoundedSemaphore(2)
@@ -61,6 +65,68 @@ def protocol(value):
 
 def service(proto, port):
     return SERVICES.get(f"{str(proto).lower()}/{port}", "")
+
+
+def iana_application_name(app_id):
+    if len(app_id) == 4 and app_id.startswith("01") or (
+            len(app_id) == 8 and app_id.startswith("010000")):
+        return PROTOCOLS.get(str(int(app_id[-2:], 16)))
+    if len(app_id) == 6 and app_id.startswith("03") or (
+            len(app_id) == 8 and app_id.startswith("0300")):
+        # RFC 6759 §4.4 uses the TCP registration for IANA-L4 port names.
+        return service("tcp", int(app_id[-4:], 16)) or None
+    return None
+
+
+def iana_application_ids(name):
+    ids = {f"01{int(number):0{width}x}" for number, label in PROTOCOLS.items()
+           if label.casefold() == name for width in (2, 6)}
+    for key, label in SERVICES.items():
+        if key.startswith("tcp/") and label.casefold() == name:
+            port = int(key.split("/", 1)[1])
+            ids.update((f"03{port:04x}", f"03{port:06x}"))
+    return ids
+
+
+def valid_application_id(app_id, domain):
+    return (isinstance(app_id, str) and APP_ID_PATTERN.fullmatch(app_id)
+            and not app_id.startswith("00") and isinstance(domain, int) and 0 <= domain < 2**32)
+
+
+class ApplicationNames:
+    def __init__(self, names=None):
+        self.names = names if names is not None else {}
+        self.exporter_names = {}
+        for (router, _domain, app_id), name in self.names.items():
+            if app_id[:2] in EXPORTER_APP_ENGINES:
+                key = (router, app_id)
+                if self.exporter_names.setdefault(key, name) != name:
+                    self.exporter_names[key] = None
+
+    def resolve(self, router, domain, app_id):
+        if not valid_application_id(app_id, domain):
+            return None
+        return (self.names.get((router, domain, app_id))
+                or self.exporter_names.get((router, app_id))
+                or iana_application_name(app_id))
+
+    def label_rows(self, rows):
+        for row in rows:
+            domain = row.pop("application_domain", 0)
+            app_id = row.get("application_id")
+            if not valid_application_id(app_id, domain):
+                row["application_id"] = None
+                continue
+            row["application_name"] = self.resolve(ipv4_number(row["router"]), domain, app_id)
+
+    def search_keys(self, name):
+        exact = {key for key, label in self.names.items() if label.casefold() == name}
+        exporters = {key for key, label in self.exporter_names.items()
+                     if label and label.casefold() == name}
+        iana = iana_application_ids(name)
+        overrides = {key for key in self.names if key not in exact
+                     and ((key[0], key[2]) in exporters or key[2] in iana)}
+        return exact, exporters, iana, overrides
 
 
 def port_charts(rows):
@@ -105,7 +171,7 @@ def reported_hop(value):
     return None if address.is_unspecified else str(address)
 
 
-def flow_observation(db, args, ceiling):
+def flow_observation(db, args, ceiling, load_applications):
     flow_id = int(args["flow_id"])
     received = int(args.get("flow_received", 0))
     if not (1 <= flow_id <= min(ceiling, 2**63 - 1) and 0 < received < 2**32):
@@ -116,7 +182,10 @@ def flow_observation(db, args, ceiling):
     """, (flow_id, received)).fetchone()
     if row is None:
         raise ValueError("Este fluxo já não está disponível. Actualiza o painel.")
-    return observation_from_row(row)
+    observation = observation_from_row(row)
+    if observation.get("application_id"):
+        load_applications().label_rows([observation])
+    return observation
 
 
 def observation_from_row(row):
@@ -208,7 +277,7 @@ def query_scope(args, now, ceiling, export):
     if (minutes not in WINDOWS or size not in {25, 50, 100}
             or not 1 <= page < 2**53 or not 0 <= prefix <= 32
             or group not in {"flow", *GROUPS} or sort not in SORTS
-            or direction not in {"", "up", "down"} or len(q) > 160
+            or direction not in {"", "up", "down"} or len(q) > (259 if q.startswith("app:") else 160)
             or not now - 3600 <= end <= now or not 0 <= ceiling < 2**63):
         raise ValueError("Filtros inválidos ou consulta antiga. Actualiza o painel.")
 
@@ -225,17 +294,18 @@ def query_scope(args, now, ceiling, export):
     return params, group, sort, page, size
 
 
-def query(db, args, export=False, now=None):
+def query(db, args, export=False, now=None, load_applications=ApplicationNames):
     now = int(time()) if now is None else now
     ceiling = int(args["ceiling"]) if "ceiling" in args else db.execute(
         "SELECT coalesce(max(rowid),0) FROM records"
     ).fetchone()[0]
     if not export and "flow_id" in args:
-        return flow_observation(db, args, ceiling)
+        return flow_observation(db, args, ceiling, load_applications)
     params, group, sort, page, size = query_scope(args, now, ceiling, export)
     start, end, step, q = (params[key] for key in ("start", "end", "step", "q"))
 
     field, sep, value = q.partition(":")
+    application_names = None
     filters = {**CHARTS, "router": "router", "sasn": "sasn", "dasn": "dasn"}
     if sep and field in filters:
         params["q"] = value.strip()
@@ -243,6 +313,16 @@ def query(db, args, export=False, now=None):
     elif sep and field == "service":
         params["q"] = value.strip()
         match = "(:q<>'' AND lower(service_name(proto,dport))=:q)"
+    elif sep and field == "app":
+        application_names = load_applications()
+        requested_name = value.strip().casefold()
+
+        def application_matches(router, domain, app_id):
+            name = application_names.resolve(ipv4_number(router), domain, app_id)
+            return bool(name and name.casefold() == requested_name)
+
+        db.create_function("application_matches", 3, application_matches, deterministic=True)
+        match = "application_matches(router, application_domain, application_id)"
     elif ipv4_number(q) is not None:
         match = "(:q=src OR :q=dst OR :q=router)"
     elif q:
@@ -262,7 +342,8 @@ def query(db, args, export=False, now=None):
             proto_name(json_extract(flow,'$.proto')) AS proto,
             nullif(CAST(json_extract(flow,'$.src_as') AS INTEGER),0) AS sasn,
             nullif(CAST(json_extract(flow,'$.dst_as') AS INTEGER),0) AS dasn,
-            json_extract(flow,'$.application_id') AS application_id
+            json_extract(flow,'$.application_id') AS application_id,
+            coalesce(json_extract(flow,'$.observation_domain_id'),0) AS application_domain
         FROM records
         WHERE received>=:start AND received<:end AND rowid<=:ceiling
           AND (:router='' OR router=:router) AND (:direction='' OR direction=:direction)
@@ -277,7 +358,7 @@ def query(db, args, export=False, now=None):
 
     if group == "flow":
         table = """SELECT id,received,router,src,dst,sport,dport,proto,sasn,dasn,packets,direction,
-                   application_id,
+                   application_id, application_domain,
                    CASE WHEN direction='up' THEN bytes ELSE 0 END AS up,
                    CASE WHEN direction='down' THEN bytes ELSE 0 END AS down,
                    bytes AS total FROM filtered"""
@@ -293,8 +374,11 @@ def query(db, args, export=False, now=None):
     )]
     if export and len(rows) > EXPORT_LIMIT:
         raise ValueError("A exportação excede 50 000 linhas. Reduz o período ou aplica um filtro.")
+    if group == "flow" and any(row.get("application_id") for row in rows):
+        (application_names or load_applications()).label_rows(rows)
     for row in rows:
         if group == "flow":
+            row.pop("application_domain", None)
             row["id"] = str(row["id"])
             row["service"] = service(row["proto"], row["dport"])
         elif group == "port" and "/" in row["key"]:
