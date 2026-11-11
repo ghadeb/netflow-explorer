@@ -47,6 +47,8 @@ RANKING_SETTINGS = {
     "max_bytes_before_external_group_by": 64000000,
     "max_bytes_before_external_sort": 64000000,
 }
+# RFC 6759: engine 13 (PANA-L7) identifies a manufacturer-wide application.
+PANA_L7_PREFIX = "0d"
 EXPORT_ERROR = "A exportação excede 50 000 linhas. Reduz o período ou aplica um filtro."
 
 
@@ -72,8 +74,14 @@ def resolve_applications(client, rows):
             GROUP BY router, domain, application_id
         """, {"routers": str(routers)})
     }
-    for row, key in pending:
-        row["application_name"] = names.get(key)
+    exporter_names = {}
+    for (router, _domain, app_id), name in names.items():
+        if len(app_id) == 8 and app_id.startswith(PANA_L7_PREFIX):
+            key = (router, app_id)
+            if exporter_names.setdefault(key, name) != name:
+                exporter_names[key] = None
+    for row, (router, domain, app_id) in pending:
+        row["application_name"] = names.get((router, domain, app_id), exporter_names.get((router, app_id)))
 
 
 def search_predicate(params):

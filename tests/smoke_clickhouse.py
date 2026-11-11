@@ -76,15 +76,16 @@ def test_nbar():
         assert rows["up"]["application_name"] is None, rows
         assert rows["down"]["application_id"] is None, rows
 
-        udp.sendto(application_table(3, app_id, "different-domain", domain=20), ("127.0.0.1", 2055))
-        udp.sendto(application_table(4, app_id, "test-app", domain=19), ("127.0.0.1", 2055))
-        deadline = monotonic() + 10
-        while monotonic() < deadline:
-            rows = {row["direction"]: row for row in view(**args)["rows"]}
-            if rows["up"]["application_name"] == "test-app":
-                break
-            sleep(0.3)
-        assert rows["up"]["application_name"] == "test-app", rows
+        # Cisco can send the manufacturer-wide name table in a separate domain.
+        for sequence, domain, name in ((3, 20, "different-domain"), (4, 19, "test-app")):
+            udp.sendto(application_table(sequence, app_id, name, domain=domain), ("127.0.0.1", 2055))
+            deadline = monotonic() + 10
+            while monotonic() < deadline:
+                rows = {row["direction"]: row for row in view(**args)["rows"]}
+                if rows["up"]["application_name"] == name:
+                    break
+                sleep(0.3)
+            assert rows["up"]["application_name"] == name, rows
         assert rows["down"]["application_id"] is None, rows
         assert b"test-app" in api("api/export", {"q": args["q"]})
 
