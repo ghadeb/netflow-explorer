@@ -113,7 +113,7 @@ show flow exporter FLUXO-UP statistics
 show flow exporter FLUXO-DOWN statistics
 ```
 
-### Cisco NBAR on the UP exporter
+### Cisco NBAR on input and output
 
 Check `show ip nbar version` and the platform's AVC licensing. On the ISR4300 reference image, `show ip nbar protocol-pack active` identified Standard Protocol Pack 38.0. Available classifications depend on the active pack and licence. CLI acceptance is the first check. A flow with an ID and a corresponding name in the collector confirms export. [Cisco NBAR for IOS XE 16.9](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/configuration/xe-16-9/fnf-xe-16-9-book/fnf-nbar.html) · [Cisco NBAR for IOS XE 3S](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/configuration/xe-3s/fnf-xe-3s-book/fnf-nbar.pdf) · [Cisco AVC licensing](https://www.cisco.com/c/en/us/td/docs/ios/solutions_docs/avc/guide/avc-user-guide/avc_activation-legacy.html)
 
@@ -168,6 +168,29 @@ show flow exporter FLUXO-UP statistics
 ```
 
 Generate traffic through the input interface and check the **Application** column in Live. The dashboard uses the exporter’s application name when available. For IANA protocol and service IDs, it can also look up the name in its local tables. Flow details and CSV include the resolved name. Daily archives retain the original ID. To roll back, use the same detach and reattach sequence with the previous record, `record netflow ipv4 original-input` for this example, and remove the option with `no option application-table` on the exporter if it was added for this test.
+
+For output, create a separate record based on `netflow ipv4 original-output`. Copy the fields from `TOP-IPV4-NBAR` into a new `TOP-IPV4-NBAR-DOWN` record. Use `match interface output` and `collect interface input` for the interface fields. Keep `collect application name` and configure `option application-table timeout 60` under `FLUXO-DOWN`. Egress NBAR support depends on the platform and release. [Cisco IOS XE 16.9 predefined IPv4 records](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/configuration/xe-16-9/fnf-xe-16-9-book/fnf-fnetflow.html)
+
+After checking that `TOP-IPV4-DOWN` is attached only in the output direction on the intended interface, apply the new record. If IOS XE rejects the output attachment, set the monitor back to `record netflow ipv4 original-output` and reattach it.
+
+```text
+configure terminal
+interface <MONITORED-INTERFACE>
+ no ip flow monitor TOP-IPV4-DOWN output
+ exit
+flow monitor TOP-IPV4-DOWN
+ no record
+ record TOP-IPV4-NBAR-DOWN
+ exit
+interface <MONITORED-INTERFACE>
+ ip flow monitor TOP-IPV4-DOWN output
+end
+show flow monitor TOP-IPV4-DOWN
+show flow interface <MONITORED-INTERFACE>
+show flow exporter FLUXO-DOWN statistics
+```
+
+Generate a new bidirectional connection and check **Application** with each direction selected in Live. The collector decodes application IDs and names from both UDP listeners.
 
 ### Other NetFlow v9 exporters
 

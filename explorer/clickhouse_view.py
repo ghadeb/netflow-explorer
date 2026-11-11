@@ -69,7 +69,7 @@ def resolve_applications(client, rows):
     for row in rows:
         domain = row.pop("application_domain", 0)
         app_id = row.get("application_id")
-        if (row["direction"] == "up" and isinstance(app_id, str)
+        if (isinstance(app_id, str)
                 and APPLICATION_ID.fullmatch(app_id) and not app_id.startswith("00")
                 and isinstance(domain, int) and 0 <= domain < 2**32):
             pending.append((row, (int(IPv4Address(row["router"])), domain, app_id)))
@@ -132,7 +132,7 @@ def flow_page(client, base, params, order):
                nullIf(f.sasn,0) AS sasn, nullIf(f.dasn,0) AS dasn, f.packets AS packets,
                if(f.sent=1,'up','down') AS direction,
                if(f.sent=1,f.bytes,0) AS up, if(f.sent=0,f.bytes,0) AS down, f.bytes AS total,
-               if(f.sent=1,JSONExtractString(f.flow,'application_id'),'') AS application_id,
+               JSONExtractString(f.flow,'application_id') AS application_id,
                JSONExtractUInt(f.flow,'observation_domain_id') AS application_domain
         FROM flows AS f
         PREWHERE f.received >= {{start:UInt32}} AND f.received < {{end:UInt32}}

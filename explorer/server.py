@@ -109,7 +109,7 @@ def observation_from_row(row):
     observation["bgp_next_hop"] = reported_hop(raw.get("bgp_next_hop"))
     observation["proto"] = protocol(raw.get("proto"))
     observation["service"] = service(observation["proto"], observation["dport"])
-    if observation["direction"] == "up" and raw.get("application_id"):
+    if raw.get("application_id"):
         observation["application_id"] = raw["application_id"]
         observation["application_domain"] = raw.get("observation_domain_id", 0)
     return observation
@@ -215,7 +215,7 @@ def query(db, args, export=False, now=None):
             proto_name(json_extract(flow,'$.proto')) AS proto,
             nullif(CAST(json_extract(flow,'$.src_as') AS INTEGER),0) AS sasn,
             nullif(CAST(json_extract(flow,'$.dst_as') AS INTEGER),0) AS dasn,
-            CASE WHEN direction='up' THEN json_extract(flow,'$.application_id') END AS application_id
+            json_extract(flow,'$.application_id') AS application_id
         FROM records
         WHERE received>=:start AND received<:end AND rowid<=:ceiling
           AND (:router='' OR router=:router) AND (:direction='' OR direction=:direction)

@@ -166,7 +166,7 @@ def encode_batch(events, allowed, first_id, applications=None):
     for direction, raw in events:
         parsed = parse_event(direction, raw, allowed)
         if parsed is None:
-            if direction == "up" and applications is not None:
+            if applications is not None:
                 add_application_option(raw, allowed, applications)
             continue
         row, flow = parsed

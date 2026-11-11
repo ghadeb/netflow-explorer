@@ -169,7 +169,7 @@ def run(storage=None):
             engine = "ClickHouse"
         try:
             for direction, port, metrics in (("up", 2055, 8081), ("down", 2056, 8082)):
-                decoder = "goflow2-nbar" if direction == "up" and storage is not None else "goflow2"
+                decoder = "goflow2-nbar" if storage is not None else "goflow2"
                 proc = Popen([
                     decoder, "-listen", f"netflow://0.0.0.0:{port}",
                     "-addr", f"127.0.0.1:{metrics}", "-format", "json",

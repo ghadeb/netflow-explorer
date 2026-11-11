@@ -60,11 +60,13 @@ def synthetic(day, size):
 
 def test_nbar():
     app_id = bytes.fromhex("0d00002a")
+    down_app_id = bytes.fromhex("0d00002b")
     args = {"q": "src:203.0.113.55", "charts": 0}
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
         for port in (2055, 2056):
             udp.sendto(packet(2, "203.0.113.55", "198.51.100.9", 443, 7000,
-                              app_id=app_id, domain=19), ("127.0.0.1", port))
+                              app_id=app_id if port == 2055 else down_app_id,
+                              domain=19), ("127.0.0.1", port))
         deadline = monotonic() + 10
         while monotonic() < deadline:
             result = view(**args)
@@ -74,7 +76,8 @@ def test_nbar():
         rows = {row["direction"]: row for row in result["rows"]}
         assert rows["up"]["application_id"] == app_id.hex(), rows
         assert rows["up"]["application_name"] is None, rows
-        assert rows["down"]["application_id"] is None, rows
+        assert rows["down"]["application_id"] == down_app_id.hex(), rows
+        assert rows["down"]["application_name"] is None, rows
 
         # Cisco can send the manufacturer-wide name table in a separate domain.
         for sequence, domain, name in ((3, 20, "different-domain"), (4, 19, "test-app")):
@@ -86,8 +89,23 @@ def test_nbar():
                     break
                 sleep(0.3)
             assert rows["up"]["application_name"] == name, rows
-        assert rows["down"]["application_id"] is None, rows
-        assert b"test-app" in api("api/export", {"q": args["q"]})
+        udp.sendto(application_table(3, down_app_id, "down-test-app", domain=19), ("127.0.0.1", 2056))
+        deadline = monotonic() + 10
+        while monotonic() < deadline:
+            data = view(**args)
+            rows = {row["direction"]: row for row in data["rows"]}
+            if rows["down"]["application_name"] == "down-test-app":
+                break
+            sleep(0.3)
+        assert rows["down"]["application_name"] == "down-test-app", rows
+        assert rows["up"]["application_name"] == "test-app", rows
+        down = rows["down"]
+        observation = view(end=data["end"], ceiling=data["ceiling"], flow_id=down["id"],
+                           flow_received=down["received"], charts=0)
+        assert observation["application_id"] == down_app_id.hex(), observation
+        assert observation["application_name"] == "down-test-app", observation
+        assert b"test-app" in api("api/export", {"q": args["q"], "direction": "up"})
+        assert b"down-test-app" in api("api/export", {"q": args["q"], "direction": "down"})
 
 
 def test_iana_application_names():
@@ -141,7 +159,8 @@ def test_many_distinct_pairs():
             SELECT {first_id:UInt64} + number, {now:UInt32} - 60 - 3600 * (number % 2),
                    IPv4StringToNum('192.0.2.1'), 3405774848 + number, 3325256704 + number,
                    number % 2, 45000, 443, 0, 64500, number + 1, 1, 'TCP',
-                   concat('{"application_id":"01000001","observation_domain_id":19,"pad":"',
+                   concat(if(number % 2, '{"application_id":"01000001","observation_domain_id":19,', '{'),
+                          '"pad":"',
                           repeat('x', 1024), '"}')
             FROM numbers({offset:UInt64}, {batch:UInt64})
         """, params={"first_id": first_id, "now": now, "offset": offset, "batch": batch_size})
