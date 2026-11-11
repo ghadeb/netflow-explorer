@@ -167,7 +167,7 @@ show flow interface <MONITORED-INTERFACE>
 show flow exporter FLUXO-UP statistics
 ```
 
-Generate traffic through the input interface and check the **Application** column in Live. It shows the ID until a matching name arrives. The name is available in the live flow details and CSV. Daily archives retain the original ID. To roll back, use the same detach and reattach sequence with the previous record, `record netflow ipv4 original-input` for this example, and remove the option with `no option application-table` on the exporter if it was added for this test.
+Generate traffic through the input interface and check the **Application** column in Live. The dashboard uses the exporter’s application name when available. For IANA protocol and service IDs, it can also look up the name in its local tables. Flow details and CSV include the resolved name. Daily archives retain the original ID. To roll back, use the same detach and reattach sequence with the previous record, `record netflow ipv4 original-input` for this example, and remove the option with `no option application-table` on the exporter if it was added for this test.
 
 ### Other NetFlow v9 exporters
 

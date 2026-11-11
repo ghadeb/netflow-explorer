@@ -52,6 +52,18 @@ PANA_L7_PREFIX = "0d"
 EXPORT_ERROR = "A exportação excede 50 000 linhas. Reduz o período ou aplica um filtro."
 
 
+def iana_application_name(app_id):
+    # Cisco NetFlow v9 can pad the IANA selector to three bytes.
+    if (len(app_id) == 4 and app_id.startswith("01")
+            or len(app_id) == 8 and app_id.startswith("010000")):
+        return panel.PROTOCOLS.get(str(int(app_id[-2:], 16)))
+    if (len(app_id) == 6 and app_id.startswith("03")
+            or len(app_id) == 8 and app_id.startswith("0300")):
+        # RFC 6759 §4.4 uses the TCP registration for IANA-L4 port names.
+        return panel.service("tcp", int(app_id[-4:], 16)) or None
+    return None
+
+
 def resolve_applications(client, rows):
     pending = []
     for row in rows:
@@ -81,7 +93,8 @@ def resolve_applications(client, rows):
             if exporter_names.setdefault(key, name) != name:
                 exporter_names[key] = None
     for row, (router, domain, app_id) in pending:
-        row["application_name"] = names.get((router, domain, app_id), exporter_names.get((router, app_id)))
+        name = names.get((router, domain, app_id), exporter_names.get((router, app_id)))
+        row["application_name"] = name or iana_application_name(app_id)
 
 
 def search_predicate(params):

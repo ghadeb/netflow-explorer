@@ -90,6 +90,34 @@ def test_nbar():
         assert b"test-app" in api("api/export", {"q": args["q"]})
 
 
+def test_iana_application_names():
+    expected = {
+        "01000001": "ICMP",
+        "030000a1": "snmp",
+        "030000b3": "bgp",
+        "03000202": "shell",
+    }
+    source = "203.0.113.56"
+    args = {"q": f"src:{source}", "charts": 0}
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+        for sequence, app_id in enumerate(expected, 5):
+            udp.sendto(packet(sequence, source, "198.51.100.9", 443, 7000,
+                              app_id=bytes.fromhex(app_id), domain=21), ("127.0.0.1", 2055))
+    deadline = monotonic() + 10
+    while monotonic() < deadline:
+        data = view(**args)
+        if len(data["rows"]) == len(expected):
+            break
+        sleep(0.3)
+    names = {row["application_id"]: row["application_name"] for row in data["rows"]}
+    assert names == expected, names
+    row = next(row for row in data["rows"] if row["application_id"] == "030000b3")
+    observation = view(end=data["end"], ceiling=data["ceiling"], flow_id=row["id"],
+                       flow_received=row["received"], charts=0)
+    assert observation["application_name"] == "bgp", observation
+    assert b"snmp" in api("api/export", {"q": args["q"]})
+
+
 def test_many_distinct_pairs():
     class LimitedMemoryClient(Client):
         def rows(self, sql, params=None, *, streaming=False, settings=None):
@@ -138,6 +166,7 @@ def main():
     assert view(**scope, network="203.0.113.0/24", charts=0)["rows"][0]["peer"] == "198.51.100.9"
     assert b"https" in api("api/export", {**scope, "direction": "up"})
     test_nbar()
+    test_iana_application_names()
 
     now = int(time())
     old = (now // DAY - 35) * DAY
