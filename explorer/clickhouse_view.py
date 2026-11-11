@@ -70,8 +70,8 @@ def resolve_applications(client, rows, names=None):
     names.label_rows(rows)
 
 
-def application_predicate(params, names, value):
-    exact, exporters, iana, overrides = names.search_keys(value.strip().casefold())
+def application_predicate(params, names, value, named_only=False):
+    exact, exporters, iana, overrides = names.search_keys(value.strip().casefold(), named_only)
     key = "(router_num, application_domain, application_id)"
     direct, fallback = [], []
     if exact:
@@ -231,7 +231,7 @@ def service_label(row):
         row["service"] = panel.service(proto, port)
 
 
-def chart_data(client, base, params):
+def chart_data(client, base, params, application_base, names):
     # Each time bucket can cover several hours. Sum the same grouped rows for
     # totals, the timeline and the UTC heatmap.
     sql = base + f"""
@@ -269,6 +269,19 @@ def chart_data(client, base, params):
                countIf(sent=1) AS up_flows, countIf(sent=0) AS down_flows
         FROM filtered WHERE dport>0 GROUP BY proto, dport
     """, params, settings=QUERY_SETTINGS)))
+    app_rows = ()
+    if any(app_id[:2] in panel.NAMED_APP_ENGINES and label.casefold() != "unknown"
+           for (_, _, app_id), label in names.names.items()):
+        app_engines = ",".join(map(repr, panel.NAMED_APP_ENGINES))
+        app_rows = client.rows(application_base + f"""
+            SELECT router_num, application_domain, application_id, count() AS flows, sum(bytes) AS total
+            FROM filtered WHERE (router_num, application_id) IN (
+                SELECT router, application_id FROM application_names
+                WHERE left(application_id, 2) IN ({app_engines}) AND lowerUTF8(name) != 'unknown'
+            )
+            GROUP BY router_num, application_domain, application_id
+        """, params, settings=QUERY_SETTINGS)
+    charts.update(panel.application_charts(app_rows, names))
     return {"totals": totals, "series": list(bins.values()), "charts": charts, "heat": heat}
 
 
@@ -281,17 +294,24 @@ def query(client, args, committed_id, routers, export=False, now=None):
     params["router_num"] = int(IPv4Address(params["router"])) if params["router"] else 0
     params["mask"] = (0xffffffff << (32 - params["prefix"])) & 0xffffffff
     names = None
-    if params["q"].startswith("app:"):
-        selected = [params["router_num"]] if params["router"] else None
+    selected = [params["router_num"]] if params["router"] else None
+    field, sep, value = params["q"].partition(":")
+    application_filter = bool(sep and field in {"app", "nbar"})
+    if application_filter:
         names = load_application_names(client, selected)
-        predicate = application_predicate(params, names, params["q"][4:])
+        predicate = application_predicate(params, names, value, named_only=field == "nbar")
     else:
         predicate = search_predicate(params)
-    base = filtered(predicate, application_filter=names is not None)
+    base = filtered(predicate, application_filter=application_filter)
     if not export and "network" in args:
         return destination_map(client, base, params, args["network"])
 
-    charts = chart_data(client, base, params) if not export and args.get("charts") != "0" else {}
+    charts = {}
+    if not export and args.get("charts") != "0":
+        if names is None:
+            names = load_application_names(client, selected)
+        application_base = base if application_filter else filtered(predicate, application_filter=True)
+        charts = chart_data(client, base, params, application_base, names)
     totals = charts["totals"] if charts else next(client.rows(base + f"SELECT {TOTALS} FROM filtered", params))
     order = panel.SORTS[sort]
     if group == "flow":

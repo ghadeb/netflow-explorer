@@ -13,7 +13,7 @@ NetFlow Explorer collects flow records from your network exporters, stores them 
 - **Interactive weathermaps** for individual flows, the peers of an IPv4 host, or the destinations reached from a source subnet.
 - **Traffic analytics** with top talkers, the 20 busiest destination ports by record count, identified services, a UTC activity heatmap, and separate sent and received totals.
 - **Flow explorer** with search, aggregation by host, conversation, subnet, port or ASN, and an editable page selector. View source and destination endpoints, packet and byte counts, and exported BGP ASNs. Resolve reverse DNS on demand and export filtered results to CSV.
-- **Cisco NBAR labels** on flows in both directions, individual weathermaps and CSV. Click an application name to filter by it. Archived flows can reuse the collector's application name table.
+- **Cisco NBAR application visibility** on flows in both directions and individual weathermaps. Two clickable Top 20 charts rank the exported applications by flow record count and traffic volume. A donut shows the byte share of the five largest applications and the remaining classified traffic. CSV includes the exported ID and its resolved name. Archived flows can reuse the collector's application name table.
 - **Daily archive browser** with 30 days of live ClickHouse queries by default. Select a verified daily `.sqlite3.xz` from the server or upload one. Historical queries run against a separate read-only copy.
 - **Direct HTTPS dashboard** with English and Portuguese, automatic refresh every ten minutes in Live, and a manual refresh control.
 
@@ -70,54 +70,21 @@ If you are upgrading from the SQLite deployment, follow the [one-time cutover an
 
 NetFlow Explorer labels records on **UDP 2055** as sent and records on **UDP 2056** as received. On a router interface facing the monitored network, `input` is traffic leaving that network and `output` is traffic returning to it. Choose the monitor directions according to where the interface sits in your topology.
 
-### Cisco Flexible NetFlow v9
+### Cisco IOS XE with NetFlow v9 and NBAR
 
-The reference platforms for these examples are an **ISR4300 with IOS XE Fuji 16.9.5** and an **ASR1000 RP1 with IOS XE 3.2.0S (IOS 15.1(1)S)**. Check field and monitor support against your platform, software release and interface type. Confirm NBAR export separately on each router. [IOS XE 16.9 Flexible NetFlow guide](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/configuration/xe-16-9/fnf-xe-16-9-book/fnf-fnetflow.html) · [ASR1000 IOS XE 3S NetFlow guide](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/netflow/configuration/xe-3s/asr1000/nf-xe-3s-asr1000-book.pdf)
+Use the complete template below for a new NetFlow setup on an interface. It exports IPv4 addresses and masks, protocol, ports, ToS, TCP flags, interface IDs, byte and packet counts, first and last timestamps, routing ASNs and next hops, and NBAR application IDs and names.
 
-For a new configuration, replace `<COLLECTOR-IP>` with the address in `NETFLOW_UDP_BIND`, `<EXPORT-SOURCE>` with the router's source interface and `<MONITORED-INTERFACE>` with the Layer 3 interface facing the monitored network. Add the exporter source IPv4 address to `FLOW_EXPORTERS`. For an existing configuration, inspect `show flow interface`, `show flow monitor` and `show flow exporter` and reuse the appropriate objects.
+The reference deployments use an **ISR4300 with IOS XE Fuji 16.9.5** and an **ASR1000 RP1 with IOS XE 3.2.0S (IOS 15.1(1)S)**. Run `show ip nbar version` and check the AVC licensing and feature support for the interface and direction on your platform. [Cisco IOS XE 16.9 Flexible NetFlow](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/configuration/xe-16-9/fnf-xe-16-9-book/fnf-fnetflow.html) · [Cisco NBAR for IOS XE 3S](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/configuration/xe-3s/fnf-xe-3s-book/fnf-nbar.pdf) · [Cisco AVC licensing](https://www.cisco.com/c/en/us/td/docs/ios/solutions_docs/avc/guide/avc-user-guide/avc_activation-legacy.html)
 
-```text
-configure terminal
-flow exporter FLUXO-UP
- destination <COLLECTOR-IP>
- source <EXPORT-SOURCE>
- transport udp 2055
- export-protocol netflow-v9
- template data timeout 60
- exit
-flow exporter FLUXO-DOWN
- destination <COLLECTOR-IP>
- source <EXPORT-SOURCE>
- transport udp 2056
- export-protocol netflow-v9
- template data timeout 60
- exit
-flow monitor TOP-IPV4
- record netflow ipv4 original-input
- exporter FLUXO-UP
- cache timeout active 60
- cache timeout inactive 15
- exit
-flow monitor TOP-IPV4-DOWN
- record netflow ipv4 original-output
- exporter FLUXO-DOWN
- cache timeout active 60
- cache timeout inactive 15
- exit
-interface <MONITORED-INTERFACE>
- ip flow monitor TOP-IPV4 input
- ip flow monitor TOP-IPV4-DOWN output
-end
-show flow interface <MONITORED-INTERFACE>
-show flow exporter FLUXO-UP statistics
-show flow exporter FLUXO-DOWN statistics
-```
+| Placeholder | Replace with |
+| --- | --- |
+| `<COLLECTOR-IP>` | The IPv4 address the router uses to reach the collector, normally the address in `NETFLOW_UDP_BIND`. Allow UDP 2055 and 2056 from the exporter. |
+| `<EXPORT-SOURCE>` | The router interface that supplies the export source address. Add that address to `FLOW_EXPORTERS` in the collector's `.env`. |
+| `<MONITORED-INTERFACE>` | The Layer 3 interface or subinterface facing the monitored network. |
 
-### Cisco NBAR on input and output
+The template requests 32-bit ASNs, 64-bit counters and both the forwarding and BGP next hops. On platforms that reject those fields, use the plain `collect routing source as` and `collect routing destination as` forms for 16-bit ASNs, omit `long` for 32-bit counters, or omit the next-hop line ending in `bgp`, as applicable. Routing metadata depends on what the router knows about the flow. [Cisco record commands](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/command/fnf-cr-book/fnf-c1.html) · [Cisco exporter commands](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/command/fnf-cr-book/fnf-m1.html)
 
-Check `show ip nbar version` and the platform's AVC licensing. On the ISR4300 reference image, `show ip nbar protocol-pack active` identified Standard Protocol Pack 38.0. Available classifications depend on the active pack and licence. CLI acceptance is the first check. A flow with an ID and a corresponding name in the collector confirms export. [Cisco NBAR for IOS XE 16.9](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/configuration/xe-16-9/fnf-xe-16-9-book/fnf-nbar.html) · [Cisco NBAR for IOS XE 3S](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/configuration/xe-3s/fnf-xe-3s-book/fnf-nbar.pdf) · [Cisco AVC licensing](https://www.cisco.com/c/en/us/td/docs/ios/solutions_docs/avc/guide/avc-user-guide/avc_activation-legacy.html)
-
-Create an input record based on the existing one. The template below uses the IPv4 original-input fields for an unsampled monitor. The application field is a non-key field. The exporter sends the ID-to-name table every 60 seconds. [Cisco record commands](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/command/fnf-cr-book/fnf-c1.html) · [Cisco exporter options](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/command/fnf-cr-book/fnf-m1.html)
+#### Complete configuration for a new interface
 
 ```text
 configure terminal
@@ -129,27 +96,83 @@ flow record TOP-IPV4-NBAR
  match transport source-port
  match transport destination-port
  match interface input
- collect routing source as
- collect routing destination as
+ collect routing source as 4-octet
+ collect routing destination as 4-octet
  collect routing next-hop address ipv4
+ collect routing next-hop address ipv4 bgp
  collect ipv4 source mask
  collect ipv4 destination mask
  collect transport tcp flags
  collect interface output
- collect counter bytes
- collect counter packets
+ collect counter bytes long
+ collect counter packets long
+ collect timestamp sys-uptime first
+ collect timestamp sys-uptime last
+ collect application name
+ exit
+flow record TOP-IPV4-NBAR-DOWN
+ match ipv4 tos
+ match ipv4 protocol
+ match ipv4 source address
+ match ipv4 destination address
+ match transport source-port
+ match transport destination-port
+ match interface output
+ collect routing source as 4-octet
+ collect routing destination as 4-octet
+ collect routing next-hop address ipv4
+ collect routing next-hop address ipv4 bgp
+ collect ipv4 source mask
+ collect ipv4 destination mask
+ collect transport tcp flags
+ collect interface input
+ collect counter bytes long
+ collect counter packets long
  collect timestamp sys-uptime first
  collect timestamp sys-uptime last
  collect application name
  exit
 flow exporter FLUXO-UP
+ destination <COLLECTOR-IP>
+ source <EXPORT-SOURCE>
+ transport udp 2055
+ export-protocol netflow-v9
+ template data timeout 60
  option application-table timeout 60
+ exit
+flow exporter FLUXO-DOWN
+ destination <COLLECTOR-IP>
+ source <EXPORT-SOURCE>
+ transport udp 2056
+ export-protocol netflow-v9
+ template data timeout 60
+ option application-table timeout 60
+ exit
+flow monitor TOP-IPV4
+ record TOP-IPV4-NBAR
+ exporter FLUXO-UP
+ cache timeout active 60
+ cache timeout inactive 15
+ exit
+flow monitor TOP-IPV4-DOWN
+ record TOP-IPV4-NBAR-DOWN
+ exporter FLUXO-DOWN
+ cache timeout active 60
+ cache timeout inactive 15
+ exit
+interface <MONITORED-INTERFACE>
+ ip flow monitor TOP-IPV4 input
+ ip flow monitor TOP-IPV4-DOWN output
 end
-show flow record TOP-IPV4-NBAR
-show flow exporter FLUXO-UP
 ```
 
-After the router accepts the new fields and application table option, replace the record on the UP monitor. This example assumes the monitor has one input attachment. Check all attachments with `show flow interface` first. Detaching the monitor interrupts input flow collection while its cache is recreated.
+For basic NetFlow in a direction that lacks NBAR support, omit `collect application name` from the custom record or select the built-in `netflow ipv4 original-input` or `netflow ipv4 original-output` record for that monitor. Omit `option application-table timeout 60` on any exporter that carries only basic NetFlow.
+
+#### Add NBAR to existing input and output monitors
+
+Run `show flow interface`, `show flow monitor` and `show flow exporter` to identify the active attachments, records and exporters. Note each current record for rollback. Create the two custom records from the complete template and add `option application-table timeout 60` to the existing exporters.
+
+The example below assumes each named monitor is attached only to the specified interface in its respective direction. Adapt the names and apply each direction separately. Detaching a monitor pauses flow collection in that direction while the router recreates its cache. [Cisco monitor record and attachment commands](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/command/fnf-cr-book/fnf-m1.html)
 
 ```text
 configure terminal
@@ -163,15 +186,7 @@ flow monitor TOP-IPV4
 interface <MONITORED-INTERFACE>
  ip flow monitor TOP-IPV4 input
 end
-show flow interface <MONITORED-INTERFACE>
-show flow exporter FLUXO-UP statistics
 ```
-
-Generate traffic through the input interface and check the **Application** column in Live. The dashboard uses the exporter’s application name when available. For IANA protocol and service IDs, it can also look up the name in its local tables. Flow details and CSV include the resolved name. Daily archives retain the original ID. To roll back, use the same detach and reattach sequence with the previous record, `record netflow ipv4 original-input` for this example, and remove the option with `no option application-table` on the exporter if it was added for this test.
-
-For output, create a separate record based on `netflow ipv4 original-output`. Copy the fields from `TOP-IPV4-NBAR` into a new `TOP-IPV4-NBAR-DOWN` record. Use `match interface output` and `collect interface input` for the interface fields. Keep `collect application name` and configure `option application-table timeout 60` under `FLUXO-DOWN`. Egress NBAR support depends on the platform and release. [Cisco IOS XE 16.9 predefined IPv4 records](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/configuration/xe-16-9/fnf-xe-16-9-book/fnf-fnetflow.html)
-
-After checking that `TOP-IPV4-DOWN` is attached only in the output direction on the intended interface, apply the new record. If IOS XE rejects the output attachment, set the monitor back to `record netflow ipv4 original-output` and reattach it.
 
 ```text
 configure terminal
@@ -185,12 +200,36 @@ flow monitor TOP-IPV4-DOWN
 interface <MONITORED-INTERFACE>
  ip flow monitor TOP-IPV4-DOWN output
 end
+```
+
+To roll back, use the same sequence for the affected direction with its original record name. For the built-in records, use `record netflow ipv4 original-input` or `record netflow ipv4 original-output`. If the new record failed to attach, start at the `flow monitor` command and reattach the restored monitor. Use `no option application-table` to undo the exporter option if it was added for this change.
+
+#### Verify export and application names
+
+```text
+show flow record TOP-IPV4-NBAR
+show flow record TOP-IPV4-NBAR-DOWN
+show flow monitor TOP-IPV4
 show flow monitor TOP-IPV4-DOWN
 show flow interface <MONITORED-INTERFACE>
+show flow exporter FLUXO-UP statistics
 show flow exporter FLUXO-DOWN statistics
 ```
 
-Generate a new bidirectional connection and check **Application** with each direction selected in Live. The collector decodes application IDs and names from both UDP listeners.
+NBAR can identify applications such as Netflix or Facebook when the active protocol pack and traffic support that classification. The dashboard separates exported layer 7 and custom classifications from port-based service labels such as HTTPS. A generic classification such as `ssl` provides the protocol family. Application-specific coverage depends on the router, software, licensing, active protocol pack and traffic visibility. [Cisco Protocol Pack 38.0.0 release notes](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/qos_nbar/prot_lib/config_library/pp3800/nbar-prot-pack3800/rel-notes-38-0-0.html) · [RFC 6759 classification engines](https://www.rfc-editor.org/rfc/rfc6759.html#section-4.1)
+
+To check a specific application, verify that the router exposes its signature, then generate a new connection through the monitored interface. While it is active, inspect both flow caches. Replace `<CLIENT-IP>` with the client address as observed by the monitor. [Cisco NBAR protocol-ID command](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/qos/command/qos-cr-book/qos-s2.html) · [Cisco flow cache commands](https://www.cisco.com/c/en/us/td/docs/ios-xml/ios/fnetflow/command/fnf-cr-book/fnf-m1.html)
+
+```text
+show ip nbar protocol-id netflix
+show ip nbar protocol-id facebook
+show flow monitor TOP-IPV4 cache filter ipv4 source address <CLIENT-IP> format record
+show flow monitor TOP-IPV4-DOWN cache filter ipv4 destination address <CLIENT-IP> format record
+```
+
+Allow about a minute for flow records and application mappings to arrive. In **Live**, select the exporter's source IP under **Router**, then check **Sent** and **Received** separately. If the cache shows the application but the dashboard shows **Name unavailable**, check `option application-table` on that direction's exporter. **Unclassified** corresponds to the exported name `unknown`. Use **View map** to check the application, reported interfaces and next hops.
+
+Click an application in either ranking or in **NBAR application** to search `nbar:<name>` across named layer 7 or custom classifications. The rankings use the selected time window and filters. The donut's denominator is the byte volume of all named application classifications in that selection, excluding `unknown`. The raw application ID is available in the flow table tooltip and CSV.
 
 ### Other NetFlow v9 exporters
 

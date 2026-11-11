@@ -29,7 +29,8 @@ PROTOCOLS = {"1": "ICMP", "6": "TCP", "17": "UDP", "33": "DCCP",
              "47": "GRE", "50": "ESP", "51": "AH", "132": "SCTP"}
 APP_ID_PATTERN = re.compile(r"(?:[0-9a-f]{2}){2,16}")
 # RFC 6759 assigns these selectors at device or manufacturer scope.
-EXPORTER_APP_ENGINES = {"02", "04", "06", "0c", "0d"}
+NAMED_APP_ENGINES = ("06", "0d", "14")  # User-defined, PANA-L7, PANA-L7-PEN.
+EXPORTER_APP_ENGINES = {"02", "04", "0c", *NAMED_APP_ENGINES}
 WINDOWS = {15, 60, 360, 1440, 10080, 43200}
 EXPORT_LIMIT = 50_000
 QUERIES = BoundedSemaphore(2)
@@ -118,15 +119,40 @@ class ApplicationNames:
                 row["application_id"] = None
                 continue
             row["application_name"] = self.resolve(ipv4_number(row["router"]), domain, app_id)
+            if app_id[:2] in NAMED_APP_ENGINES:
+                name = row["application_name"]
+                row["application_status"] = (
+                    "unmapped" if not name else "unknown" if name.casefold() == "unknown" else "named"
+                )
 
-    def search_keys(self, name):
-        exact = {key for key, label in self.names.items() if label.casefold() == name}
+    def search_keys(self, name, named_only=False):
+        exact = {key for key, label in self.names.items() if label.casefold() == name
+                 and (not named_only or key[2][:2] in NAMED_APP_ENGINES)}
         exporters = {key for key, label in self.exporter_names.items()
-                     if label and label.casefold() == name}
-        iana = iana_application_ids(name)
+                     if label and label.casefold() == name
+                     and (not named_only or key[1][:2] in NAMED_APP_ENGINES)}
+        iana = set() if named_only else iana_application_ids(name)
         overrides = {key for key in self.names if key not in exact
                      and ((key[0], key[2]) in exporters or key[2] in iana)}
         return exact, exporters, iana, overrides
+
+
+def application_charts(rows, names):
+    apps = {}
+    for row in rows:
+        router, domain, app_id = row["router_num"], row["application_domain"], row["application_id"]
+        name = names.resolve(router, domain, app_id)
+        if not name or name.casefold() == "unknown":
+            continue
+        summary = apps.setdefault(name.casefold(), {"key": name, "flows": 0, "total": 0})
+        summary["key"] = min(summary["key"], name)
+        summary["flows"] += row["flows"]
+        summary["total"] += row["total"]
+    return {
+        "app_count": nsmallest(20, apps.values(), key=lambda r: (-r["flows"], -r["total"], r["key"])),
+        "app_volume": nsmallest(20, apps.values(), key=lambda r: (-r["total"], -r["flows"], r["key"])),
+        "app_total": sum(app["total"] for app in apps.values()),
+    }
 
 
 def port_charts(rows):
@@ -277,7 +303,8 @@ def query_scope(args, now, ceiling, export):
     if (minutes not in WINDOWS or size not in {25, 50, 100}
             or not 1 <= page < 2**53 or not 0 <= prefix <= 32
             or group not in {"flow", *GROUPS} or sort not in SORTS
-            or direction not in {"", "up", "down"} or len(q) > (259 if q.startswith("app:") else 160)
+            or direction not in {"", "up", "down"}
+            or len(q) > (255 + q.index(":") + 1 if q.startswith(("app:", "nbar:")) else 160)
             or not now - 3600 <= end <= now or not 0 <= ceiling < 2**63):
         raise ValueError("Filtros inválidos ou consulta antiga. Actualiza o painel.")
 
@@ -313,11 +340,13 @@ def query(db, args, export=False, now=None, load_applications=ApplicationNames):
     elif sep and field == "service":
         params["q"] = value.strip()
         match = "(:q<>'' AND lower(service_name(proto,dport))=:q)"
-    elif sep and field == "app":
+    elif sep and field in {"app", "nbar"}:
         application_names = load_applications()
         requested_name = value.strip().casefold()
 
         def application_matches(router, domain, app_id):
+            if field == "nbar" and (not isinstance(app_id, str) or app_id[:2] not in NAMED_APP_ENGINES):
+                return False
             name = application_names.resolve(ipv4_number(router), domain, app_id)
             return bool(name and name.casefold() == requested_name)
 
@@ -375,7 +404,9 @@ def query(db, args, export=False, now=None, load_applications=ApplicationNames):
     if export and len(rows) > EXPORT_LIMIT:
         raise ValueError("A exportação excede 50 000 linhas. Reduz o período ou aplica um filtro.")
     if group == "flow" and any(row.get("application_id") for row in rows):
-        (application_names or load_applications()).label_rows(rows)
+        if application_names is None:
+            application_names = load_applications()
+        application_names.label_rows(rows)
     for row in rows:
         if group == "flow":
             row.pop("application_domain", None)
@@ -417,6 +448,16 @@ def query(db, args, export=False, now=None, load_applications=ApplicationNames):
                count(CASE WHEN direction='down' THEN 1 END) AS down_flows
         FROM filtered WHERE dport>0 GROUP BY proto, dport
     """, params)))
+    if application_names is None:
+        application_names = load_applications()
+    app_engines = ",".join(map(repr, NAMED_APP_ENGINES))
+    app_rows = db.execute(base + f"""
+        SELECT ipv4_number(router) AS router_num, application_domain, application_id,
+               count(*) AS flows, sum(bytes) AS total
+        FROM filtered WHERE substr(application_id,1,2) IN ({app_engines})
+        GROUP BY router, application_domain, application_id
+    """, params) if application_names.names else ()
+    charts.update(application_charts(app_rows, application_names))
 
     heat = {
         row["slot"]: row["total"]

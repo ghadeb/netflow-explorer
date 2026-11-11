@@ -76,9 +76,38 @@ class ExplorerTest(TestCase):
         data = server.query(self.db, {"q": "app:SYSLOG"}, now=NOW, **names)
         self.assertEqual(data["matches"], 1)
         self.assertEqual(data["rows"][0]["application_name"], "syslog")
+        self.assertEqual(data["rows"][0]["application_status"], "named")
         data = server.query(self.db, {"q": "app:https"}, now=NOW, **names)
         self.assertEqual(data["matches"], 1)
         self.assertEqual(data["rows"][0]["application_name"], "https")
+        self.assertNotIn("application_status", data["rows"][0])
+        self.assertEqual(server.query(self.db, {"q": "nbar:https"}, now=NOW, **names)["matches"], 0)
+
+    def test_nbar_rankings_separate_same_port_apps_and_exclude_unknown_ids(self):
+        router = server.ipv4_number(ROUTER)
+        catalog = {(router, 0, f"0d{index:06x}"): f"app-{index:02d}" for index in range(2, 24)}
+        catalog[router, 0, "0d000001"] = "unknown"
+        catalog[router, 0, "0d000002"] = "facebook"
+        catalog[router, 0, "0d000003"] = "netflix"
+        for (_, _, app_id), _ in catalog.items():
+            self.add_flow(application_id=app_id, size=1_000 if app_id == "0d000003" else 400)
+        self.add_flow(application_id="0d000002", direction="down")
+        self.add_flow(application_id="0d000099")
+        self.add_flow(application_id="030001bb")
+        names = {"load_applications": lambda: server.ApplicationNames(catalog)}
+        data = server.query(self.db, {}, now=NOW, **names)
+        self.assertEqual(len(data["charts"]["app_count"]), 20)
+        self.assertEqual(len(data["charts"]["app_volume"]), 20)
+        self.assertEqual(data["charts"]["app_count"][0]["key"], "facebook")
+        self.assertEqual(data["charts"]["app_volume"][0]["key"], "netflix")
+        self.assertEqual(data["charts"]["app_total"], 9_800)
+        statuses = {row["application_id"]: row.get("application_status") for row in data["rows"]}
+        self.assertEqual(statuses["0d000001"], "unknown")
+        self.assertEqual(statuses["0d000099"], "unmapped")
+        self.assertIsNone(statuses["030001bb"])
+        filtered = server.query(self.db, {"q": "nbar:Facebook", "direction": "down"}, now=NOW, **names)
+        self.assertEqual(filtered["matches"], 1)
+        self.assertEqual(filtered["charts"]["app_count"], [{"key": "facebook", "flows": 1, "total": 400}])
 
     def test_top_ports_use_record_count_and_service_filter(self):
         self.add_flow(dport=443, size=1_000_000)

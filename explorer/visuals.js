@@ -103,6 +103,38 @@ function renderServices(rows) {
   $('port').innerHTML = '<div class="service-list">' + details + '</div>';
 }
 
+function applicationText(row) {
+  if (row.application_status === 'named') return row.application_name;
+  if (row.application_status === 'unknown') return t('Não identificada');
+  if (row.application_status === 'unmapped') return t('Sem nome');
+  return '';
+}
+
+function renderApplications(charts) {
+  const noApps = '<p class="empty">' + t('Sem aplicações NBAR identificadas neste intervalo.') + '</p>';
+  $('app-count').innerHTML = charts.app_count.length ? barList(charts.app_count, 'nbar', 'flows') : noApps;
+  $('app-volume').innerHTML = charts.app_volume.length ? barList(charts.app_volume, 'nbar') : noApps;
+  $('app-pie').innerHTML = '';
+  if (!charts.app_total) return;
+
+  const colors = ['#38d8b0', '#8da8ff', '#ffcb78', '#f38cb1', '#72caf5', '#65768e'];
+  const slices = charts.app_volume.slice(0, 5).filter(row => row.total > 0)
+    .map((row, index) => ({...row, color: colors[index]}));
+  const rest = charts.app_total - slices.reduce((sum, row) => sum + row.total, 0);
+  if (rest > 0) slices.push({key: t('Outras aplicações'), total: rest, color: colors[5]});
+  let angle = 0;
+  const segments = [];
+  const legend = slices.map((row, index) => {
+    const share = row.total / charts.app_total;
+    const end = index === slices.length - 1 ? 360 : angle + share * 360;
+    segments.push(`${row.color} ${angle}deg ${end}deg`);
+    angle = end;
+    return `<li><i style="background:${row.color}" aria-hidden="true"></i><span>${esc(row.key)}</span><b>${fmt.format(share * 100)}%</b></li>`;
+  }).join('');
+  $('app-pie').innerHTML = `<figure class="app-pie"><div class="app-donut" style="background:conic-gradient(${segments.join(',')})" aria-hidden="true"></div>
+    <figcaption><b>${volume(charts.app_total)} · ${t('Volume NBAR identificado')}</b><ul>${legend}</ul></figcaption></figure>`;
+}
+
 let mapState, mapRequest;
 
 function clearMap() {
@@ -146,7 +178,8 @@ function renderFlowMap(flow) {
     ['Sentido', t(flow.direction === 'up' ? 'Enviado' : 'Recebido')],
     ['Recepção UTC', stamp(flow.received)],
   ];
-  if (flow.application_id) details.push(['Aplicação', esc(flow.application_name || flow.application_id)]);
+  const app = applicationText(flow);
+  if (app) details.push(['Aplicação NBAR', esc(app)]);
   if (flow.started > 0) details.push(['Início UTC', stamp(flow.started / 1e9)]);
   if (flow.ended > 0) details.push(['Fim UTC', stamp(flow.ended / 1e9)]);
   if (flow.next_hop) details.push(['Próximo salto exportado', esc(flow.next_hop)]);

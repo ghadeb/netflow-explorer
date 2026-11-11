@@ -100,8 +100,14 @@ def test_nbar():
             sleep(0.3)
         assert rows["down"]["application_name"] == "down-test-app", rows
         assert rows["up"]["application_name"] == "test-app", rows
+        assert all(row["application_status"] == "named" for row in rows.values()), rows
         filtered = view(q="app:DOWN-TEST-APP")
         assert filtered["matches"] == 1 and filtered["rows"][0]["direction"] == "down", filtered
+        filtered = view(q="nbar:DOWN-TEST-APP")
+        assert filtered["matches"] == 1 and filtered["rows"][0]["direction"] == "down", filtered
+        ranked = view(q=args["q"])["charts"]
+        assert {row["key"] for row in ranked["app_count"]} == {"test-app", "down-test-app"}, ranked
+        assert ranked["app_total"] == 14_000, ranked
         assert view(q="app:different-domain", charts=0)["matches"] == 0
         down = rows["down"]
         observation = view(end=data["end"], ceiling=data["ceiling"], flow_id=down["id"],
@@ -136,6 +142,8 @@ def test_iana_application_names():
             if names.keys() == expected.keys():
                 break
     assert names == expected, data
+    assert all("application_status" not in row for row in data["rows"]), data
+    assert view(q="nbar:ICMP", charts=0)["matches"] == 0
     row = next(row for row in data["rows"] if row["application_id"] == "030000b3")
     observation = view(end=data["end"], ceiling=data["ceiling"], flow_id=row["id"],
                        flow_received=row["received"], charts=0)

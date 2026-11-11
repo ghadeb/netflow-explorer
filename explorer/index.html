@@ -99,7 +99,7 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
   </div>
   <form id="filters">
     <label class="search"><span data-i18n>Pesquisar</span>
-      <input name="q" type="search" maxlength="259" placeholder="IP, porto, serviço, aplicação ou AS…" data-i18n-placeholder="IP, porto, serviço, aplicação ou AS…" autocomplete="off">
+      <input name="q" type="search" maxlength="260" placeholder="IP, porto, serviço, aplicação ou AS…" data-i18n-placeholder="IP, porto, serviço, aplicação ou AS…" autocomplete="off">
     </label>
     <label><span data-i18n>Período</span>
       <select name="minutes"><option value="15">15 min</option><option value="60" selected data-i18n>1 hora</option><option value="360" data-i18n>6 horas</option><option value="1440" data-i18n>24 horas</option><option value="10080" data-i18n>7 dias</option><option value="43200" data-i18n>30 dias</option></select>
@@ -128,6 +128,10 @@ td.number{text-align:right}.endpoint{font-family:ui-monospace,monospace}.endpoin
       <article class="card"><div class="card-head"><h3 data-i18n>Top destinos</h3></div><div id="dst" class="rank"></div></article>
     </div>
     <article class="card full service-card"><div class="card-head"><h3 data-i18n>Top 20 portos e serviços</h3><small data-i18n>Por número de registos</small></div><div id="port"></div></article>
+    <div class="chart-pair full">
+      <article class="card app-card"><div class="card-head"><h3 data-i18n>Top 20 aplicações NBAR</h3><small data-i18n>Por número de registos</small></div><div id="app-count" class="rank app-rank"></div></article>
+      <article class="card app-card"><div class="card-head"><h3 data-i18n>Top 20 aplicações NBAR</h3><small data-i18n>Por volume</small></div><div id="app-pie"></div><div id="app-volume" class="rank app-rank"></div></article>
+    </div>
     <article class="card"><div class="card-head"><h3 data-i18n>Conversas · origem → destino</h3></div><div id="pair" class="rank"></div></article>
     <article class="card"><div class="card-head"><h3 data-i18n>ASNs de destino exportados</h3></div><div id="asn" class="rank"></div></article>
     <article class="card"><div class="card-head"><h3 data-i18n>Protocolos e serviços</h3><small data-i18n>Registos</small></div><div id="proto"></div></article>
@@ -306,17 +310,15 @@ function apply() {
   load();
 }
 
-function barList(rows, key) {
-  const byCount = key === 'service';
-  const metric = byCount ? 'flows' : 'total';
+function barList(rows, key, metric = key === 'service' ? 'flows' : 'total') {
   const max = Math.max(1, ...rows.map(row => row[metric]));
   return rows.map(row => {
-    const label = t(row.key) + (row.service ? ' · ' + row.service : '');
+    const label = (key === 'nbar' ? row.key : t(row.key)) + (row.service ? ' · ' + row.service : '');
     const action = key === 'src' || key === 'dst'
       ? 'data-search-ip="' + esc(row.key) : 'data-query="' + esc(key + ':' + row.key);
     return '<button type="button" ' + action + '" title="' + esc(label) +
       '"><i style="width:' + (100 * row[metric] / max) + '%"></i><span>' + esc(label) +
-      '</span><b>' + (byCount ? fmt.format(row.flows) : volume(row.total)) + '</b></button>';
+      '</span><b>' + (metric === 'flows' ? fmt.format(row.flows) : volume(row.total)) + '</b></button>';
   }).join('');
 }
 function draw(data) {
@@ -352,6 +354,7 @@ function draw(data) {
 
   renderActivityPeak(data);
   renderServices(data.charts.port);
+  renderApplications(data.charts);
   for (const key of ['src','dst','pair','asn']) {
     const rows = data.charts[key];
     $(key).innerHTML = rows.length ? barList(rows,key) :
@@ -394,10 +397,10 @@ function groupLabel(key) {
   return esc(t(key));
 }
 function applicationLabel(row) {
-  if (row.application_name) {
-    return `<button class="filter-link" type="button" data-query="app:${esc(row.application_name)}">${esc(row.application_name)}</button>`;
+  if (row.application_status === 'named') {
+    return `<button class="filter-link" type="button" data-query="nbar:${esc(row.application_name)}">${esc(row.application_name)}</button>`;
   }
-  return row.application_id ? t('Sem nome') : '—';
+  return esc(applicationText(row) || '—');
 }
 function table(data) {
   const individual = filters.group === 'flow';
@@ -406,7 +409,7 @@ function table(data) {
     (data.matches === 1 ? 'grupo' : 'grupos');
   $('count').textContent = fmt.format(data.matches) + ' ' + t(unit);
   const titles = individual ?
-    ['Recepção UTC','Router','Origem','Destino','Protocolo / serviço','Aplicação','ASN origem / destino','Enviado','Recebido','Total','Pacotes','Mapa'] :
+    ['Recepção UTC','Router','Origem','Destino','Protocolo / serviço','Aplicação NBAR','ASN origem / destino','Enviado','Recebido','Total','Pacotes','Mapa'] :
     ['Grupo','Registos','Enviado','Recebido','Total','Pacotes'];
   $('head').innerHTML = '<tr>' + titles.map(title => `<th scope="col">${t(title)}</th>`).join('') + '</tr>';
   $('body').innerHTML = data.rows.length ? data.rows.map(row => {
